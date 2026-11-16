@@ -1,0 +1,1066 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src data:; form-action 'none'; base-uri 'none'">
+<title>ArchiMate-viewer</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --line: #d9dde3; --text: #1c2430; --muted: #667085;
+  --accent: #0b6bcb; --accent-soft: #e3effb; --sel: #d6336c; --canvas: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181d; --panel: #1c2128; --line: #303843; --text: #e6e9ee; --muted: #9aa5b4;
+    --accent: #6cb2f7; --accent-soft: #1f3247; --sel: #ff6b9d; --canvas: #f7f8fa;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg); color: var(--text);
+  display: grid; grid-template-columns: 290px 1fr 340px; grid-template-rows: 100%;
+}
+aside { background: var(--panel); overflow: auto; min-width: 0; }
+#left { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+#right { border-left: 1px solid var(--line); padding: 14px 16px 24px; }
+#left header { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+#left h1 { font-size: 15px; margin: 0 0 2px; }
+#left .build { color: var(--muted); font-size: 12px; }
+#search {
+  width: 100%; margin-top: 10px; padding: 7px 9px; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+}
+#nav { overflow: auto; padding: 8px 6px 20px; flex: 1; }
+#nav details { margin-left: 8px; }
+#nav summary { cursor: pointer; padding: 3px 4px; font-weight: 600; border-radius: 4px; }
+#nav summary:hover { background: var(--bg); }
+#nav a, .linklist a {
+  display: block; padding: 3px 6px 3px 18px; color: var(--text); text-decoration: none;
+  border-radius: 4px; overflow-wrap: anywhere;
+}
+#nav a:hover, .linklist a:hover { background: var(--bg); }
+#nav a.current { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+#nav .group-title { margin: 10px 6px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+#nav .sub { color: var(--muted); font-size: 12px; }
+
+main { position: relative; min-width: 0; background: var(--canvas); }
+#svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+#svg.panning { cursor: grabbing; }
+#toolbar {
+  position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 8px; flex-wrap: wrap;
+  align-items: center; pointer-events: none;
+}
+#toolbar > * { pointer-events: auto; }
+.bar {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px;
+  display: flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+.bar.title { font-weight: 600; padding: 6px 10px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button, select {
+  font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 9px; cursor: pointer;
+}
+button:hover { background: var(--bg); }
+button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.bar label { color: var(--muted); font-size: 12px; }
+#hint {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 20px; padding: 5px 14px; font-size: 12.5px; color: var(--muted);
+  box-shadow: 0 1px 3px rgba(0,0,0,.08); white-space: nowrap; max-width: 94%; overflow: hidden; text-overflow: ellipsis;
+}
+
+#right h2 { font-size: 16px; margin: 0 0 2px; overflow-wrap: anywhere; }
+#right h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; }
+#right .type { color: var(--muted); font-size: 12.5px; }
+#right p.doc { white-space: pre-wrap; margin: 10px 0 0; overflow-wrap: anywhere; }
+#right table { border-collapse: collapse; width: 100%; }
+#right td { padding: 3px 0; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+#right td:first-child { color: var(--muted); padding-right: 10px; width: 42%; }
+.rel { display: flex; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; align-items: baseline; }
+.rel:hover { background: var(--bg); }
+.rel .arrow { color: var(--muted); flex: none; width: 14px; text-align: center; }
+.rel .rt { color: var(--muted); font-size: 12px; flex: none; }
+.rel .nm { flex: 1; overflow-wrap: anywhere; }
+.rel.off { opacity: .6; }
+.linklist a { padding-left: 6px; }
+.filter { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
+.filter svg { flex: none; }
+.empty { color: var(--muted); }
+.chip { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 10px; padding: 0 8px; font-size: 12px; margin: 0 4px 4px 0; cursor: pointer; }
+
+/* Verbind-, laad- en foutscherm */
+#screen { position: fixed; inset: 0; background: var(--bg); z-index: 10; overflow: auto; display: none; padding: 32px 16px; }
+#screen.show { display: block; }
+#screen .card { max-width: 620px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px 28px; }
+#screen h1 { font-size: 20px; margin: 0 0 6px; }
+#screen .muted { color: var(--muted); font-size: 13px; }
+#screen ol { padding-left: 20px; margin: 8px 0; }
+#screen a { color: var(--accent); }
+#screen .error { border: 1px solid var(--sel); border-left-width: 5px; border-radius: 6px; padding: 12px 14px; margin: 14px 0; }
+#screen .error h2 { font-size: 15px; margin: 0 0 4px; color: var(--sel); }
+#screen .error p { margin: 4px 0; }
+#screen .error ul { margin: 6px 0 0; padding-left: 20px; }
+#screen .error code { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; white-space: pre-wrap; }
+#screen label.f { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+#screen input[type=text], #screen input[type=password] { width: 100%; padding: 8px 10px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+#screen .row { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+#screen button { padding: 7px 14px; }
+#screen button.primary { background: var(--accent); color: #fff; border-color: var(--accent); padding: 7px 18px; font-weight: 600; }
+#screen progress { width: 100%; height: 10px; margin-top: 14px; }
+#left .tools { margin-top: 6px; display: flex; gap: 12px; font-size: 12px; }
+#left .tools a { color: var(--accent); text-decoration: none; cursor: pointer; }
+#left .tools a:hover { text-decoration: underline; }
+#left .build.offline { color: var(--sel); }
+
+/* Diagram */
+.node rect.shape, .node path.shape { stroke: #5a5a5a; stroke-width: 1; }
+.node { cursor: pointer; }
+.node.note, .node.plain { cursor: default; }
+.node .label { font-family: "Segoe UI", system-ui, sans-serif; color: #000; overflow: hidden; display: flex; height: 100%; padding: 3px 5px; line-height: 1.2; overflow-wrap: anywhere; }
+.node .icon { fill: none; stroke: #333; stroke-width: 1; }
+.conn path.line { fill: none; stroke: #444; stroke-width: 1; }
+.conn path.hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+.conn .head { stroke: #444; stroke-width: 1; }
+.conn text { font: 11px "Segoe UI", system-ui, sans-serif; fill: #222; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; text-anchor: middle; }
+.conn.hover path.line, .conn.hover .head { stroke: var(--accent); stroke-width: 2; }
+.node.hover .shape { stroke: var(--accent); stroke-width: 2; }
+.node.sel .shape { stroke: var(--sel) !important; stroke-width: 3 !important; }
+.conn.typeoff { display: none; }
+
+#svg.focus .node:not(.on):not(.ctx) { opacity: .09; }
+#svg.focus .conn:not(.on) { opacity: .05; }
+#svg.focus .node.ctx { opacity: .55; }
+#svg.focus .conn.on path.line, #svg.focus .conn.on .head { stroke-width: 1.8; }
+#svg.focus.hide .node:not(.on):not(.ctx), #svg.focus.hide .conn:not(.on) { display: none; }
+
+@media (max-width: 1000px) {
+  body { grid-template-columns: 1fr; grid-template-rows: auto 70vh auto; height: auto; }
+  #left { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  #right { border-left: 0; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<aside id="left">
+  <header>
+    <h1 id="modelName"></h1>
+    <div class="build" id="build"></div>
+    <div class="tools"><a id="reload">Vernieuwen</a><a id="settings">Instellingen</a></div>
+    <input id="search" type="search" placeholder="Zoek view of element…" autocomplete="off">
+  </header>
+  <nav id="nav"></nav>
+</aside>
+
+<main>
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg"><g id="vp"><g id="nodes"></g><g id="conns"></g></g></svg>
+  <div id="toolbar">
+    <div class="bar title" id="viewTitle"></div>
+    <div class="bar">
+      <label>Overige</label>
+      <button id="modeDim" title="Niet-gerelateerde elementen vervagen">Vervagen</button>
+      <button id="modeHide" title="Niet-gerelateerde elementen verbergen">Verbergen</button>
+    </div>
+    <div class="bar">
+      <label for="depth">Stappen</label>
+      <select id="depth" title="Hoeveel relaties ver vanaf het gekozen element">
+        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+      </select>
+    </div>
+    <div class="bar">
+      <button id="zoomOut" title="Uitzoomen">−</button>
+      <button id="zoomIn" title="Inzoomen">+</button>
+      <button id="fit" title="Hele view tonen">Passend</button>
+      <button id="clear" title="Selectie wissen (Esc)">Wis selectie</button>
+    </div>
+  </div>
+  <div id="hint"></div>
+</main>
+
+<aside id="right"></aside>
+
+<div id="screen"><div class="card" id="card"></div></div>
+
+<script>
+"use strict";
+let M = null;                 // het geladen model
+const $ = id => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ---------- Modelindexen ---------- */
+let relsByElement = new Map();            // element-id -> [relatie-id]
+let viewsByElement = new Map();           // element-id -> Set(view-id)
+function indexModel() {
+  relsByElement = new Map(); viewsByElement = new Map();
+  for (const [rid, r] of Object.entries(M.relations)) {
+    for (const end of [r.s, r.g]) {
+      if (!relsByElement.has(end)) relsByElement.set(end, []);
+      if (!relsByElement.get(end).includes(rid)) relsByElement.get(end).push(rid);
+    }
+  }
+  for (const [vid, v] of Object.entries(M.views)) {
+    (function walk(list) {
+      for (const n of list) {
+        if (n.e) { if (!viewsByElement.has(n.e)) viewsByElement.set(n.e, new Set()); viewsByElement.get(n.e).add(vid); }
+        if (n.c) walk(n.c);
+      }
+    })(v.nodes);
+  }
+}
+
+/* ---------- ArchiMate-kennis ---------- */
+const TYPE_NL = {
+  ApplicationComponent: "Applicatiecomponent", ApplicationService: "Applicatieservice", ApplicationCollaboration: "Applicatiesamenwerking",
+  ApplicationInterface: "Applicatie-interface", ApplicationFunction: "Applicatiefunctie", ApplicationProcess: "Applicatieproces",
+  DataObject: "Dataobject", BusinessActor: "Bedrijfsactor", BusinessRole: "Bedrijfsrol", BusinessProcess: "Bedrijfsproces",
+  BusinessFunction: "Bedrijfsfunctie", BusinessService: "Bedrijfsservice", BusinessObject: "Bedrijfsobject", Grouping: "Groepering",
+  Node: "Node", Device: "Apparaat", SystemSoftware: "Systeemsoftware", TechnologyService: "Technologieservice",
+  TechnologyFunction: "Technologiefunctie", CommunicationNetwork: "Communicatienetwerk", Equipment: "Apparatuur", Location: "Locatie",
+};
+const REL_NL = {
+  Association: "Associatie", Flow: "Flow", Composition: "Compositie", Aggregation: "Aggregatie", Access: "Toegang",
+  Realization: "Realisatie", Serving: "Dienend", Triggering: "Triggering", Assignment: "Toewijzing", Influence: "Invloed",
+  Specialization: "Specialisatie", "": "Verbinding",
+};
+const relKind = r => (r ? r.t.replace(/Relationship$/, "") : "");
+const typeName = t => TYPE_NL[t] || t.replace(/([a-z])([A-Z])/g, "$1 $2");
+
+function layerColor(t) {
+  if (t === "Grouping" || t === "Junction") return "#d2d7d7";
+  if (t === "Location") return "#fbb875";
+  if (/^(Business|Contract|Representation|Product)/.test(t)) return "#ffffb5";
+  if (/^(Application|DataObject)/.test(t)) return "#b5ffff";
+  if (/^(Node|Device|SystemSoftware|Technology|Artifact|CommunicationNetwork|Path|Equipment|Facility|DistributionNetwork|Material)/.test(t)) return "#c9e7b7";
+  if (/^(Stakeholder|Driver|Assessment|Goal|Outcome|Principle|Requirement|Constraint|Meaning|Value)/.test(t)) return "#ccccff";
+  if (/^(Resource|Capability|CourseOfAction|ValueStream)/.test(t)) return "#f5deaa";
+  if (/^(WorkPackage|Deliverable|ImplementationEvent)/.test(t)) return "#e0ffe0";
+  if (/^(Plateau|Gap)/.test(t)) return "#e0ffe0";
+  return "#ffffff";
+}
+const isRounded = t => /(Service|Process|Function|Interaction|Event|Capability|ValueStream|CourseOfAction|Goal|Outcome)$/.test(t);
+
+/* Pictogram rechtsboven in een elementvak (14 x 12 px). */
+function iconFor(t) {
+  if (t === "ApplicationComponent") return '<path d="M3 0H14V12H3V10M3 7V5M3 2V0M0 2H6V5H0ZM0 7H6V10H0Z"/>';
+  if (/Service$/.test(t)) return '<rect x="0" y="1.5" width="14" height="9" rx="4.5"/>';
+  if (/Process$/.test(t)) return '<path d="M0 3.5H8V0L14 6L8 12V8.5H0Z"/>';
+  if (/Function$/.test(t)) return '<path d="M0 12V4L7 0L14 4V12L7 8Z"/>';
+  if (/Collaboration$/.test(t)) return '<circle cx="4.5" cy="6" r="4.5"/><circle cx="9.5" cy="6" r="4.5"/>';
+  if (/Interface$/.test(t)) return '<circle cx="9.5" cy="6" r="4"/><path d="M0 6H5.5"/>';
+  if (t === "BusinessActor") return '<circle cx="7" cy="2.2" r="2.2"/><path d="M7 4.4V8.5M3 6H11M7 8.5L3.5 12M7 8.5L10.5 12"/>';
+  if (t === "BusinessRole") return '<path d="M3 1H11A3 5 0 0 1 11 11H3A3 5 0 0 1 3 1ZM11 1A3 5 0 0 0 11 11"/>';
+  if (/Object$/.test(t) || t === "Contract") return '<path d="M1 0H13V12H1ZM1 3.5H13"/>';
+  if (t === "Node") return '<path d="M0 3H11V12H0ZM0 3L3 0H14L11 3M14 0V9L11 12"/>';
+  if (t === "Device") return '<rect x="1.5" y="0" width="11" height="8" rx="1.5"/><path d="M3 8L0 12H14L11 8"/>';
+  if (t === "SystemSoftware") return '<circle cx="6" cy="7" r="5"/><path d="M8 2.4A5 5 0 1 1 10.6 9"/>';
+  if (t === "Equipment") return '<circle cx="7" cy="6" r="4.5" stroke-dasharray="2.4 1.4" stroke-width="2.4"/><circle cx="7" cy="6" r="1.5"/>';
+  if (t === "CommunicationNetwork") return '<path d="M3 10L5 2H13L11 10Z"/><circle cx="3" cy="10" r="1.6" fill="#333"/><circle cx="5" cy="2" r="1.6" fill="#333"/><circle cx="13" cy="2" r="1.6" fill="#333"/><circle cx="11" cy="10" r="1.6" fill="#333"/>';
+  if (t === "Location") return '<path d="M7 12C3 7 2 6 2 4A5 4 0 0 1 12 4C12 6 11 7 7 12Z"/>';
+  return "";
+}
+
+/* Lijnstijl en pijlpunten per relatietype. */
+function relStyle(rel) {
+  const k = relKind(rel);
+  switch (k) {
+    case "Composition": return { start: "diamondF" };
+    case "Aggregation": return { start: "diamondO" };
+    case "Assignment": return { start: "dot", end: "arrowF" };
+    case "Realization": return { dash: "4 3", end: "triO" };
+    case "Serving": return { end: "arrowO" };
+    case "Access": {
+      const a = rel.a ?? 0;   // 0 schrijven, 1 lezen, 2 toegang, 3 lezen/schrijven
+      return { dash: "2 2", end: a === 0 || a === 3 ? "arrowO" : null, start: a === 1 || a === 3 ? "arrowO" : null };
+    }
+    case "Influence": return { dash: "6 3", end: "arrowO" };
+    case "Triggering": return { end: "arrowF" };
+    case "Flow": return { dash: "6 3", end: "arrowF" };
+    case "Specialization": return { end: "triO" };
+    case "Association": return { end: rel.dir ? "arrowO" : null };
+    default: return { dash: "2 3" };
+  }
+}
+
+/* ---------- Toestand ---------- */
+const state = { view: null, sel: new Set(), depth: 1, hide: false, typesOff: new Set() };
+let L = null;                 // lay-out van de huidige view
+let tf = { x: 0, y: 0, k: 1 };
+
+/* ---------- Lay-out ---------- */
+function layoutView(view) {
+  const nodes = new Map(), order = [];
+  (function walk(list, ox, oy, parent) {
+    for (const n of list) {
+      const w = n.b[2] > 0 ? n.b[2] : 120, h = n.b[3] > 0 ? n.b[3] : 55;
+      const o = { id: n.id, x: ox + n.b[0], y: oy + n.b[1], w, h, parent, raw: n, kids: [] };
+      nodes.set(n.id, o); order.push(o);
+      if (parent) parent.kids.push(o);
+      walk(n.c || [], o.x, o.y, o);
+    }
+  })(view.nodes, 0, 0, null);
+
+  const conns = [];
+  for (const c of view.conns) {
+    const S = nodes.get(c.s), T = nodes.get(c.t);
+    if (!S || !T) continue;                   // verbinding naar een andere verbinding: niet getekend
+    const sc = { x: S.x + S.w / 2, y: S.y + S.h / 2 }, tc = { x: T.x + T.w / 2, y: T.y + T.h / 2 };
+    const bp = c.bp || [];
+    // Archi bewaart buigpunten relatief t.o.v. beide uiteinden en weegt ze langs de lijn.
+    const bends = bp.map((b, i) => {
+      const wgt = (i + 1) / (bp.length + 1);
+      return { x: (sc.x + b[0]) * (1 - wgt) + (tc.x + b[2]) * wgt, y: (sc.y + b[1]) * (1 - wgt) + (tc.y + b[3]) * wgt };
+    });
+    const pts = [anchor(S, bends[0] || tc, bends.length > 0), ...bends, anchor(T, bends[bends.length - 1] || sc, bends.length > 0)];
+    conns.push({ id: c.id, raw: c, S, T, pts, rel: c.r ? M.relations[c.r] : null });
+  }
+  return { nodes, order, conns };
+}
+
+/* Aanhechtpunt op de rand van een vak, gericht naar punt ref. */
+function anchor(box, ref, snap) {
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  const inX = ref.x >= box.x && ref.x <= box.x + box.w, inY = ref.y >= box.y && ref.y <= box.y + box.h;
+  if (snap && inX && !inY) return { x: ref.x, y: ref.y < cy ? box.y : box.y + box.h };
+  if (snap && inY && !inX) return { x: ref.x < cx ? box.x : box.x + box.w, y: ref.y };
+  const dx = ref.x - cx, dy = ref.y - cy;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const s = 0.5 / Math.max(Math.abs(dx) / box.w, Math.abs(dy) / box.h);
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+
+/* ---------- Tekenen ---------- */
+function nodeSvg(o) {
+  const n = o.raw, el = n.e ? M.elements[n.e] : null, t = el ? el.t : "";
+  const { x, y, w, h } = o;
+  let fill = n.fc || (n.k === "note" ? "#ffffff" : n.k === "group" ? "#d2d7d7" : n.k === "ref" ? "#dcebeb" : layerColor(t));
+  const alpha = n.al != null ? n.al / 255 : 1;
+  const stroke = n.lc ? ` style="stroke:${esc(n.lc)}"` : "";
+  const lw = n.lw ? ` stroke-width="${n.lw}"` : "";
+  const isGroup = t === "Grouping" || n.k === "group";
+  let shape, labelY = y, labelH = h, labelW = w;
+
+  if (isGroup && !n.ft) {                       // groepering met tabje
+    const tw = Math.min(w / 2, Math.max(60, w / 2)), th = Math.min(18, h);
+    shape = `<path class="shape" d="M${x} ${y}H${x + tw}V${y + th}H${x + w}V${y + h}H${x}Z M${x} ${y + th}H${x + tw}" fill="${esc(fill)}" fill-opacity="${alpha}" stroke-dasharray="${t === "Grouping" ? "5 3" : "none"}"${stroke}${lw}/>`;
+  } else {
+    const rx = isGroup ? 0 : n.k === "note" ? 0 : isRounded(t) ? 10 : 0;
+    const dash = t === "Grouping" ? ' stroke-dasharray="5 3"' : "";
+    shape = `<rect class="shape" x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${esc(fill)}" fill-opacity="${alpha}"${dash}${stroke}${lw}/>`;
+  }
+
+  const icon = el && !isGroup && !n.ft ? iconFor(t) : "";
+  const iconSvg = icon ? `<g class="icon" transform="translate(${x + w - 19},${y + 5})">${icon}</g>` : "";
+
+  const text = el ? el.n : n.k === "ref" ? (M.views[n.ref]?.n || "") : n.txt;
+  const ta = n.ta ?? (isGroup || n.k === "note" ? 1 : 2);              // 1 links, 2 midden, 4 rechts
+  const tp = n.tp ?? (isGroup || n.k === "note" || o.kids.length ? 0 : 0); // 0 boven, 1 midden, 2 onder
+  const just = ta === 1 ? "flex-start" : ta === 4 ? "flex-end" : "center";
+  const align = tp === 1 ? "center" : tp === 2 ? "flex-end" : "flex-start";
+  const size = (n.fs || 9) * 4 / 3;
+  const style = `justify-content:${just};align-items:${align};text-align:${ta === 1 ? "left" : ta === 4 ? "right" : "center"};font-size:${size}px;`
+    + (n.fst & 1 ? "font-weight:700;" : "") + (n.fst & 2 ? "font-style:italic;" : "") + (n.ftc ? `color:${esc(n.ftc)};` : "")
+    + (icon && ta !== 1 ? "padding-left:20px;padding-right:20px;" : icon ? "padding-right:20px;" : "") + "white-space:pre-wrap;";
+  const label = text ? `<foreignObject x="${x}" y="${labelY}" width="${labelW}" height="${labelH}" pointer-events="none"><div xmlns="http://www.w3.org/1999/xhtml" class="label" style="${style}"><span>${esc(text)}</span></div></foreignObject>` : "";
+
+  const cls = "node" + (n.k === "note" ? " note" : "") + (!el && n.k !== "ref" && n.k !== "note" ? " plain" : "");
+  return `<g class="${cls}" data-id="${esc(o.id)}">${shape}${iconSvg}${label}</g>`;
+}
+
+function headSvg(kind, tip, from) {
+  if (!kind) return "";
+  const a = Math.atan2(tip.y - from.y, tip.x - from.x);
+  const p = (len, off) => `${(tip.x - len * Math.cos(a) + off * Math.sin(a)).toFixed(1)} ${(tip.y - len * Math.sin(a) - off * Math.cos(a)).toFixed(1)}`;
+  const tipS = `${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`;
+  switch (kind) {
+    case "arrowF": return `<path class="head" d="M${p(9, 4)}L${tipS}L${p(9, -4)}Z" fill="#444"/>`;
+    case "arrowO": return `<path class="head" d="M${p(9, 4)}L${tipS}L${p(9, -4)}" fill="none"/>`;
+    case "triO": return `<path class="head" d="M${p(11, 6)}L${tipS}L${p(11, -6)}Z" fill="#fff"/>`;
+    case "diamondF": return `<path class="head" d="M${tipS}L${p(7, 4)}L${p(14, 0)}L${p(7, -4)}Z" fill="#444"/>`;
+    case "diamondO": return `<path class="head" d="M${tipS}L${p(7, 4)}L${p(14, 0)}L${p(7, -4)}Z" fill="#fff"/>`;
+    case "dot": return `<circle class="head" cx="${(tip.x - 3 * Math.cos(a)).toFixed(1)}" cy="${(tip.y - 3 * Math.sin(a)).toFixed(1)}" r="3" fill="#444"/>`;
+  }
+  return "";
+}
+
+/* Punt op fractie f (0..1) van de totale lengte van een polylijn. */
+function pointAlong(pts, f) {
+  let total = 0; const seg = [];
+  for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); seg.push(d); total += d; }
+  let want = total * f;
+  for (let i = 0; i < seg.length; i++) {
+    if (want <= seg[i] || i === seg.length - 1) {
+      const r = seg[i] ? want / seg[i] : 0;
+      return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * r, y: pts[i].y + (pts[i + 1].y - pts[i].y) * r };
+    }
+    want -= seg[i];
+  }
+  return pts[0];
+}
+
+function connSvg(c) {
+  const st = relStyle(c.rel), pts = c.pts;
+  const d = "M" + pts.map(p => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join("L");
+  const color = c.raw.lc ? ` style="stroke:${esc(c.raw.lc)}"` : "";
+  const dash = st.dash ? ` stroke-dasharray="${st.dash}"` : "";
+  const text = c.rel ? c.rel.n : c.raw.txt;
+  let label = "";
+  if (text) {
+    const m = pointAlong(pts, c.raw.tp === 0 ? 0.15 : c.raw.tp === 2 ? 0.85 : 0.5);
+    label = `<text x="${m.x.toFixed(1)}" y="${(m.y - 3).toFixed(1)}">${esc(text)}</text>`;
+  }
+  return `<g class="conn" data-id="${esc(c.id)}" data-kind="${relKind(c.rel)}"><path class="hit" d="${d}"/><path class="line" d="${d}"${dash}${color}/>`
+    + headSvg(st.start, pts[0], pts[1]) + headSvg(st.end, pts[pts.length - 1], pts[pts.length - 2]) + label + "</g>";
+}
+
+function renderView() {
+  const v = M.views[state.view];
+  L = layoutView(v);
+  $("nodes").innerHTML = L.order.map(nodeSvg).join("");
+  $("conns").innerHTML = L.conns.map(connSvg).join("");
+  L.nodeEl = new Map(); L.connEl = new Map();
+  for (const g of $("nodes").children) L.nodeEl.set(g.dataset.id, g);
+  for (const g of $("conns").children) L.connEl.set(g.dataset.id, g);
+  $("viewTitle").textContent = v.n;
+  $("viewTitle").title = v.n;
+  document.title = v.n + " – " + M.name;
+  for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("current", a.dataset.view === state.view);
+  fit();
+  applyFocus();
+}
+
+/* ---------- Focus: alleen de relaties van het gekozen element ---------- */
+function computeFocus() {
+  const selNodes = new Set();
+  for (const o of L.order) if (o.raw.e && state.sel.has(o.raw.e)) selNodes.add(o);
+  if (!selNodes.size) return null;
+
+  // Een gekozen vak telt mee met alles wat erin genest is.
+  const reached = new Set(selNodes);
+  (function addKids(list) { for (const o of list) { reached.add(o); addKids(o.kids); } })([...selNodes].flatMap(o => o.kids));
+
+  const conns = new Set();
+  let frontier = new Set(reached);
+  for (let step = 0; step < state.depth && frontier.size; step++) {
+    const next = new Set();
+    for (const c of L.conns) {
+      if (state.typesOff.has(relKind(c.rel))) continue;
+      const a = frontier.has(c.S), b = frontier.has(c.T);
+      if (!a && !b) continue;
+      conns.add(c);
+      for (const o of [c.S, c.T]) if (!reached.has(o)) { reached.add(o); next.add(o); }
+    }
+    frontier = next;
+  }
+  const ctx = new Set();
+  for (const o of reached) for (let p = o.parent; p; p = p.parent) if (!reached.has(p)) ctx.add(p);
+  return { selNodes, reached, conns, ctx };
+}
+
+function applyFocus() {
+  const f = computeFocus();
+  const svg = $("svg");
+  svg.classList.toggle("focus", !!f);
+  svg.classList.toggle("hide", state.hide);
+  for (const o of L.order) {
+    const g = L.nodeEl.get(o.id);
+    g.classList.toggle("on", !!f && f.reached.has(o));
+    g.classList.toggle("ctx", !!f && f.ctx.has(o));
+    g.classList.toggle("sel", !!f && f.selNodes.has(o));
+  }
+  for (const c of L.conns) {
+    const g = L.connEl.get(c.id);
+    g.classList.toggle("on", !!f && f.conns.has(c));
+    g.classList.toggle("typeoff", state.typesOff.has(relKind(c.rel)));
+  }
+  $("modeDim").classList.toggle("on", !state.hide);
+  $("modeHide").classList.toggle("on", state.hide);
+  $("clear").disabled = !state.sel.size;
+  if (f) {
+    const others = f.reached.size - f.selNodes.size;
+    $("hint").textContent = `${f.conns.size} relatie${f.conns.size === 1 ? "" : "s"} met ${others} element${others === 1 ? "" : "en"} · klik op de achtergrond of druk op Esc om alles weer te tonen`;
+  } else {
+    $("hint").textContent = "Klik op een element om alleen zijn relaties te tonen · Shift-klik voegt toe · slepen = verschuiven · scrollen = zoomen";
+  }
+  renderPanel(f);
+  writeHash();
+}
+
+function select(elementId, additive) {
+  if (!elementId) { state.sel.clear(); }
+  else if (additive) { state.sel.has(elementId) ? state.sel.delete(elementId) : state.sel.add(elementId); }
+  else if (state.sel.size === 1 && state.sel.has(elementId)) { state.sel.clear(); }
+  else { state.sel = new Set([elementId]); }
+  applyFocus();
+}
+
+function openView(viewId, elementId) {
+  if (!M.views[viewId]) return;
+  state.view = viewId;
+  state.sel = new Set(elementId ? [elementId] : []);
+  state.typesOff.clear();
+  renderView();
+}
+
+/* ---------- Detailpaneel ---------- */
+function propsTable(props) {
+  if (!props || !props.length) return "";
+  return "<h3>Eigenschappen</h3><table>" + props.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${linkify(v)}</td></tr>`).join("") + "</table>";
+}
+function linkify(v) {
+  return /^https?:\/\/\S+$/.test(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>` : esc(v);
+}
+
+function renderPanel(f) {
+  const v = M.views[state.view];
+  let html = "";
+  if (state.sel.size === 1) {
+    const id = [...state.sel][0], el = M.elements[id];
+    html += `<h2>${esc(el.n || "(naamloos)")}</h2><div class="type">${esc(typeName(el.t))}</div>`;
+    if (el.d) html += `<p class="doc">${esc(el.d)}</p>`;
+    html += propsTable(el.p);
+
+    const inView = new Set(L.conns.filter(c => c.raw.r).map(c => c.raw.r));
+    const rels = (relsByElement.get(id) || []).map(rid => ({ rid, r: M.relations[rid] }))
+      .filter(x => M.elements[x.r.s] && M.elements[x.r.g]);
+    const row = ({ rid, r }, off) => {
+      const out = r.s === id, other = out ? r.g : r.s, o = M.elements[other];
+      return `<div class="rel${off ? " off" : ""}" data-el="${esc(other)}" data-off="${off ? 1 : ""}" title="${esc(REL_NL[relKind(r)] || relKind(r))}${r.d ? " – " + esc(r.d) : ""}">`
+        + `<span class="arrow">${out ? "→" : "←"}</span><span class="nm">${esc(o.n || "(naamloos)")}${r.n ? ` <span class="rt">· ${esc(r.n)}</span>` : ""}</span>`
+        + `<span class="rt">${esc(REL_NL[relKind(r)] || relKind(r))}</span></div>`;
+    };
+    const byName = (a, b) => (M.elements[a.r.s === id ? a.r.g : a.r.s].n || "").localeCompare(M.elements[b.r.s === id ? b.r.g : b.r.s].n || "", "nl");
+    const here = rels.filter(x => inView.has(x.rid)).sort(byName), elsewhere = rels.filter(x => !inView.has(x.rid)).sort(byName);
+    html += `<h3>Relaties in deze view (${here.length})</h3>` + (here.length ? here.map(x => row(x, false)).join("") : '<div class="empty">Geen relaties in deze view.</div>');
+    if (elsewhere.length) html += `<h3>Overige relaties in het model (${elsewhere.length})</h3>` + elsewhere.map(x => row(x, true)).join("");
+
+    const views = [...(viewsByElement.get(id) || [])].filter(vid => vid !== state.view).sort((a, b) => M.views[a].n.localeCompare(M.views[b].n, "nl"));
+    if (views.length) html += `<h3>Komt ook voor in (${views.length})</h3><div class="linklist">` + views.map(vid => `<a href="#" data-view="${esc(vid)}" data-el="${esc(id)}">${esc(M.views[vid].n)}</a>`).join("") + "</div>";
+  } else if (state.sel.size > 1) {
+    html += `<h2>${state.sel.size} elementen gekozen</h2><div class="type">Klik op een naam om die uit de selectie te halen</div><p>`
+      + [...state.sel].map(id => `<span class="chip" data-toggle="${esc(id)}">${esc(M.elements[id]?.n || id)} ×</span>`).join("") + "</p>";
+  } else {
+    const nEl = L.order.filter(o => o.raw.e).length;
+    html += `<h2>${esc(v.n)}</h2><div class="type">${nEl} elementen · ${L.conns.length} relaties</div>`;
+    if (v.d) html += `<p class="doc">${esc(v.d)}</p>`;
+    html += propsTable(v.p);
+  }
+
+  // Filter op relatietype
+  const counts = new Map();
+  for (const c of L.conns) counts.set(relKind(c.rel), (counts.get(relKind(c.rel)) || 0) + 1);
+  if (counts.size) {
+    html += "<h3>Relatietypen in deze view</h3>";
+    for (const [k, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+      const st = relStyle({ t: k });
+      const sample = `<svg width="46" height="12" class="conn"><path class="line" d="M2 6H44"${st.dash ? ` stroke-dasharray="${st.dash}"` : ""}/>${headSvg(st.start, { x: 2, y: 6 }, { x: 44, y: 6 })}${headSvg(st.end, { x: 44, y: 6 }, { x: 2, y: 6 })}</svg>`;
+      html += `<label class="filter"><input type="checkbox" data-kind="${esc(k)}"${state.typesOff.has(k) ? "" : " checked"}>${sample}<span>${esc(REL_NL[k] || k)} <span class="rt" style="color:var(--muted)">(${n})</span></span></label>`;
+    }
+  }
+  $("right").innerHTML = html;
+}
+
+$("right").addEventListener("click", e => {
+  const link = e.target.closest("a[data-view]");
+  if (link) { e.preventDefault(); openView(link.dataset.view, link.dataset.el); return; }
+  const chip = e.target.closest("[data-toggle]");
+  if (chip) { select(chip.dataset.toggle, true); return; }
+  const rel = e.target.closest(".rel");
+  if (rel) {
+    const id = rel.dataset.el;
+    if (rel.dataset.off && !L.order.some(o => o.raw.e === id)) {
+      const first = [...(viewsByElement.get(id) || [])][0];
+      if (first) openView(first, id);
+    } else select(id, false);
+  }
+});
+$("right").addEventListener("change", e => {
+  const k = e.target.dataset.kind;
+  if (k == null) return;
+  e.target.checked ? state.typesOff.delete(k) : state.typesOff.add(k);
+  applyFocus();
+});
+
+/* ---------- Navigatie en zoeken ---------- */
+function treeHtml(node, top) {
+  const inner = node.f.map(f => treeHtml(f, false)).join("") + node.v.map(vid => `<a href="#" data-view="${esc(vid)}">${esc(M.views[vid].n)}</a>`).join("");
+  return top ? inner : `<details open><summary>${esc(node.n)}</summary>${inner}</details>`;
+}
+function renderNav(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) { $("nav").innerHTML = treeHtml(M.tree, true); }
+  else {
+    const views = Object.entries(M.views).filter(([, v]) => v.n.toLowerCase().includes(q)).sort((a, b) => a[1].n.localeCompare(b[1].n, "nl"));
+    const els = Object.entries(M.elements).filter(([id, e]) => viewsByElement.has(id) && (
+      (e.n || "").toLowerCase().includes(q) || (e.p || []).some(p => p[1].toLowerCase().includes(q))))
+      .sort((a, b) => (a[1].n || "").localeCompare(b[1].n || "", "nl")).slice(0, 80);
+    $("nav").innerHTML = `<div class="group-title">Views (${views.length})</div>`
+      + views.map(([vid, v]) => `<a href="#" data-view="${esc(vid)}">${esc(v.n)}</a>`).join("")
+      + `<div class="group-title">Elementen (${els.length}${els.length === 80 ? "+" : ""})</div>`
+      + els.map(([id, e]) => `<a href="#" data-find="${esc(id)}">${esc(e.n || "(naamloos)")}<div class="sub">${esc(typeName(e.t))} · ${viewsByElement.get(id).size} view${viewsByElement.get(id).size === 1 ? "" : "s"}</div></a>`).join("");
+  }
+  for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("current", a.dataset.view === state.view);
+}
+$("search").addEventListener("input", e => renderNav(e.target.value));
+$("nav").addEventListener("click", e => {
+  const a = e.target.closest("a");
+  if (!a) return;
+  e.preventDefault();
+  if (a.dataset.view) openView(a.dataset.view);
+  else if (a.dataset.find) {
+    const id = a.dataset.find, views = viewsByElement.get(id);
+    if (views.has(state.view)) select(id, false); else openView([...views][0], id);
+    if (state.sel.has(id)) centerOn(id);
+  }
+});
+
+/* ---------- Verschuiven en zoomen ---------- */
+function applyTf() { $("vp").setAttribute("transform", `translate(${tf.x},${tf.y}) scale(${tf.k})`); }
+function bbox() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
+  for (const o of L.order) { add(o.x, o.y); add(o.x + o.w, o.y + o.h); }
+  for (const c of L.conns) for (const p of c.pts) add(p.x, p.y);
+  return isFinite(x0) ? { x0, y0, x1, y1 } : { x0: 0, y0: 0, x1: 100, y1: 100 };
+}
+function fit() {
+  const r = $("svg").getBoundingClientRect(), b = bbox(), pad = 30, top = 56;
+  const k = Math.min((r.width - 2 * pad) / (b.x1 - b.x0), (r.height - top - pad - 30) / (b.y1 - b.y0), 1.5);
+  tf.k = Math.max(k, 0.05);
+  tf.x = (r.width - (b.x1 - b.x0) * tf.k) / 2 - b.x0 * tf.k;
+  tf.y = top + (r.height - top - 30 - (b.y1 - b.y0) * tf.k) / 2 - b.y0 * tf.k;
+  applyTf();
+}
+function zoomAt(px, py, factor) {
+  const k = Math.min(8, Math.max(0.05, tf.k * factor));
+  tf.x = px - (px - tf.x) * (k / tf.k); tf.y = py - (py - tf.y) * (k / tf.k); tf.k = k;
+  applyTf();
+}
+function centerOn(elementId) {
+  const o = L.order.find(n => n.raw.e === elementId);
+  if (!o) return;
+  const r = $("svg").getBoundingClientRect();
+  tf.k = Math.max(tf.k, 0.8);
+  tf.x = r.width / 2 - (o.x + o.w / 2) * tf.k; tf.y = r.height / 2 - (o.y + o.h / 2) * tf.k;
+  applyTf();
+}
+
+const svg = $("svg");
+let drag = null;
+svg.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = svg.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
+svg.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  drag = { x: e.clientX, y: e.clientY, tx: tf.x, ty: tf.y, moved: false, target: e.target };
+  svg.setPointerCapture(e.pointerId);
+});
+svg.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  drag.moved = true; svg.classList.add("panning");
+  tf.x = drag.tx + dx; tf.y = drag.ty + dy; applyTf();
+});
+svg.addEventListener("pointerup", e => {
+  const d = drag; drag = null; svg.classList.remove("panning");
+  if (!d || d.moved) return;
+  const nodeG = d.target.closest?.(".node"), connG = d.target.closest?.(".conn");
+  if (nodeG) {
+    const o = L.nodes.get(nodeG.dataset.id);
+    if (o.raw.k === "ref" && o.raw.ref) return openView(o.raw.ref);
+    if (o.raw.e) return select(o.raw.e, e.shiftKey || e.metaKey || e.ctrlKey);
+    return;
+  }
+  if (connG) {
+    const c = L.conns.find(x => x.id === connG.dataset.id);
+    const ends = [c.S.raw.e, c.T.raw.e].filter(Boolean);
+    if (ends.length) { state.sel = new Set(ends); applyFocus(); }
+    return;
+  }
+  select(null);
+});
+svg.addEventListener("pointercancel", () => { drag = null; svg.classList.remove("panning"); });
+
+// Bij aanwijzen de verbindingen van een element oplichten
+svg.addEventListener("pointerover", e => {
+  const g = e.target.closest?.(".node");
+  if (!g || drag) return;
+  const o = L.nodes.get(g.dataset.id);
+  if (!o || !o.raw.e) return;
+  g.classList.add("hover");
+  for (const c of L.conns) if (c.S === o || c.T === o) L.connEl.get(c.id).classList.add("hover");
+});
+svg.addEventListener("pointerout", e => {
+  if (!e.target.closest?.(".node")) return;
+  for (const g of svg.querySelectorAll(".hover")) g.classList.remove("hover");
+});
+
+$("zoomIn").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.3); };
+$("zoomOut").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.3); };
+$("fit").onclick = fit;
+$("clear").onclick = () => select(null);
+$("modeDim").onclick = () => { state.hide = false; applyFocus(); };
+$("modeHide").onclick = () => { state.hide = true; applyFocus(); };
+$("depth").onchange = e => { state.depth = +e.target.value; applyFocus(); };
+document.addEventListener("keydown", e => {
+  if (!M || $("screen").classList.contains("show")) return;
+  if (e.key === "Escape" && document.activeElement !== $("search")) select(null);
+  if (e.key === "/" && document.activeElement !== $("search")) { e.preventDefault(); $("search").focus(); }
+});
+
+/* ---------- Deelbare link ---------- */
+let lastHash = "";
+function writeHash() {
+  if (!M) return;
+  const p = new URLSearchParams({ v: state.view });
+  if (state.sel.size) p.set("s", [...state.sel].join(","));
+  if (state.depth > 1) p.set("d", state.depth);
+  if (state.hide) p.set("h", 1);
+  lastHash = "#" + p.toString();
+  if (location.hash !== lastHash) history.replaceState(null, "", lastHash);
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const first = (function firstView(n) { return n.v[0] || n.f.map(firstView).find(Boolean); })(M.tree) || Object.keys(M.views)[0];
+  state.view = M.views[p.get("v")] ? p.get("v") : first;
+  state.sel = new Set((p.get("s") || "").split(",").filter(id => M.elements[id]));
+  state.depth = Math.min(3, Math.max(1, +p.get("d") || 1));
+  state.hide = p.get("h") === "1";
+  $("depth").value = state.depth;
+}
+window.addEventListener("hashchange", () => { if (M && location.hash !== lastHash) { readHash(); renderView(); } });
+window.addEventListener("resize", () => { if (L) applyTf(); });
+
+/* ---------- coArchi-bestanden omzetten naar het model ---------- */
+const XSI = "http://www.w3.org/2001/XMLSchema-instance";
+const kids = (el, name) => [...el.children].filter(c => c.localName === name);
+const hrefId = el => { const h = el ? el.getAttribute("href") || "" : "", i = h.indexOf("#"); return i >= 0 ? h.slice(i + 1) : null; };
+const xsiType = el => (el.getAttributeNS(XSI, "type") || "").replace(/^.*:/, "");
+const put = (o, k, v) => { if (v != null && v !== "" && !(Array.isArray(v) && !v.length)) o[k] = v; };
+const int = (v, d = 0) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
+const propsOf = el => kids(el, "properties").map(p => [p.getAttribute("key") || "", p.getAttribute("value") || ""]);
+
+function parseNode(el, conns) {
+  const kind = { DiagramModelArchimateObject: "el", DiagramModelNote: "note", DiagramModelGroup: "group", DiagramModelReference: "ref" }[xsiType(el)] || "other";
+  const b = kids(el, "bounds")[0];
+  const out = { id: el.getAttribute("id"), k: kind, b: b ? [int(b.getAttribute("x")), int(b.getAttribute("y")), int(b.getAttribute("width"), -1), int(b.getAttribute("height"), -1)] : [0, 0, -1, -1] };
+  put(out, "e", hrefId(kids(el, "archimateElement")[0]));
+  put(out, "ref", hrefId(kids(el, "model")[0]));
+  put(out, "fc", el.getAttribute("fillColor"));
+  put(out, "lc", el.getAttribute("lineColor"));
+  put(out, "ftc", el.getAttribute("fontColor"));
+  put(out, "txt", kind === "note" ? el.getAttribute("content") : el.getAttribute("name"));
+  for (const [attr, key] of [["textAlignment", "ta"], ["textPosition", "tp"], ["alpha", "al"], ["type", "ft"], ["lineWidth", "lw"]])
+    if (el.hasAttribute(attr)) out[key] = int(el.getAttribute(attr));
+  const font = (el.getAttribute("font") || "").split("|");   // SWT-fontstring: 1|Naam|grootte|stijl|...
+  if (parseFloat(font[2])) out.fs = parseFloat(font[2]);
+  if (int(font[3])) out.fst = int(font[3]);
+
+  for (const sc of kids(el, "sourceConnections")) {
+    const c = { id: sc.getAttribute("id"), s: sc.getAttribute("source"), t: sc.getAttribute("target") };
+    put(c, "r", hrefId(kids(sc, "archimateRelationship")[0]));
+    put(c, "lc", sc.getAttribute("lineColor"));
+    put(c, "txt", sc.getAttribute("name"));
+    if (sc.hasAttribute("textPosition")) c.tp = int(sc.getAttribute("textPosition"));
+    put(c, "bp", kids(sc, "bendpoints").map(p => [int(p.getAttribute("startX")), int(p.getAttribute("startY")), int(p.getAttribute("endX")), int(p.getAttribute("endY"))]));
+    conns.push(c);
+  }
+  put(out, "c", kids(el, "children").map(ch => parseNode(ch, conns)));
+  return out;
+}
+
+/* files: [{ path, text }] met alle XML-bestanden onder model/ en het .archimate-bestand in de hoofdmap. */
+function buildModel(files, fallbackName) {
+  const model = { name: fallbackName, elements: {}, relations: {}, views: {}, tree: null, skipped: [] };
+  const folderNames = new Map(), viewDirs = new Map(), parser = new DOMParser();
+  for (const f of files) {
+    const doc = parser.parseFromString(f.text, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) { model.skipped.push(f.path); continue; }
+    const root = doc.documentElement, tag = root.localName, dir = f.path.slice(0, f.path.lastIndexOf("/"));
+    if (!f.path.includes("/")) { if (tag === "model") model.name = root.getAttribute("name") || model.name; continue; }
+    if (f.path.endsWith("/folder.xml")) { folderNames.set(dir, root.getAttribute("name") || dir.split("/").pop()); continue; }
+    if (tag === "ArchimateDiagramModel") {
+      const conns = [], view = { n: root.getAttribute("name") || "(naamloos)" };
+      put(view, "d", root.getAttribute("documentation"));
+      put(view, "p", propsOf(root));
+      view.nodes = kids(root, "children").map(ch => parseNode(ch, conns));
+      view.conns = conns;
+      model.views[root.getAttribute("id")] = view;
+      viewDirs.set(root.getAttribute("id"), dir);
+      continue;
+    }
+    if (/DiagramModel$|^SketchModel$|^CanvasModel$/.test(tag)) continue;   // sketch- en canvasviews: niet ondersteund
+    const item = { t: tag };
+    put(item, "n", root.getAttribute("name"));
+    put(item, "d", root.getAttribute("documentation"));
+    put(item, "p", propsOf(root));
+    if (tag.endsWith("Relationship")) {
+      item.s = hrefId(kids(root, "source")[0]); item.g = hrefId(kids(root, "target")[0]);
+      if (root.hasAttribute("accessType")) item.a = int(root.getAttribute("accessType"));
+      if (root.getAttribute("directed") === "true") item.dir = 1;
+      model.relations[root.getAttribute("id")] = item;
+    } else {
+      model.elements[root.getAttribute("id")] = item;
+    }
+  }
+  // Mappenboom van de views
+  const dirs = new Set([...viewDirs.values(), ...[...folderNames.keys()].filter(d => d.startsWith("model/diagrams"))]);
+  const byName = (a, b) => a.localeCompare(b, "nl", { numeric: true });
+  const treeFor = dir => {
+    const node = { n: folderNames.get(dir) || dir.split("/").pop(), f: [], v: [] };
+    for (const d of dirs) if (d.slice(0, d.lastIndexOf("/")) === dir) { const ch = treeFor(d); if (ch.f.length || ch.v.length) node.f.push(ch); }
+    node.f.sort((a, b) => byName(a.n, b.n));
+    node.v = [...viewDirs].filter(([, d]) => d === dir).map(([id]) => id).sort((a, b) => byName(model.views[a].n, model.views[b].n));
+    return node;
+  };
+  model.tree = treeFor("model/diagrams");
+  const loose = [...viewDirs].filter(([, d]) => !d.startsWith("model/diagrams")).map(([id]) => id);
+  model.tree.v.push(...loose);
+  return model;
+}
+
+/* ---------- Instellingen en opslag ---------- */
+const API = "https://api.github.com";
+const DEFAULT_REPO = "Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen";
+const store = {
+  get(k) { try { return localStorage.getItem(k) ?? sessionStorage.getItem(k); } catch { return null; } },
+  set(k, v, persist = true) { try { (persist ? localStorage : sessionStorage).setItem(k, v); (persist ? sessionStorage : localStorage).removeItem(k); } catch { /* opslag geblokkeerd */ } },
+  del(k) { try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch { /* opslag geblokkeerd */ } },
+};
+const query = new URLSearchParams(location.search);
+const cfg = {
+  repo: (query.get("repo") || store.get("amv.repo") || DEFAULT_REPO).trim(),
+  ref: (query.get("ref") ?? store.get("amv.ref") ?? "").trim(),
+  token: store.get("amv.token") || "",
+};
+let memoryToken = "";   // als opslag in de browser niet werkt
+
+/* Laatst geladen model per repo bewaren, zodat openen snel gaat en offline nog werkt. */
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("archimate-viewer", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("models");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("models", mode), req = fn(tx.objectStore("models"));
+      tx.oncomplete = () => resolve(req.result); tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+const cacheKey = () => `${cfg.repo.toLowerCase()}@${cfg.ref}`;
+const cacheGet = () => idb("readonly", s => s.get(cacheKey())).catch(() => null);
+const cachePut = value => idb("readwrite", s => s.put(value, cacheKey())).catch(() => null);
+
+/* ---------- GitHub ---------- */
+class LoadError extends Error {
+  constructor(kind, info = {}) { super(kind); this.kind = kind; this.info = info; }
+}
+
+async function gh(path, { method = "GET", body, what = "" } = {}) {
+  let res;
+  try {
+    res = await fetch(API + path, {
+      method, body: body ? JSON.stringify(body) : undefined, cache: "no-store",
+      headers: { Authorization: "Bearer " + (cfg.token || memoryToken), Accept: "application/vnd.github+json", ...(body ? { "Content-Type": "application/json" } : {}) },
+    });
+  } catch (err) {
+    throw new LoadError("network", { detail: String(err.message || err) });
+  }
+  if (res.ok) return res.json();
+  let message = "";
+  try { message = (await res.json()).message || ""; } catch { /* geen JSON */ }
+  const info = { status: res.status, message, what };
+  if (res.status === 401) throw new LoadError("auth", info);
+  if (res.status === 403 || res.status === 429) {
+    if (res.headers.get("x-ratelimit-remaining") === "0" || /rate limit/i.test(message)) {
+      const reset = +res.headers.get("x-ratelimit-reset");
+      throw new LoadError("rate", { ...info, reset: reset ? new Date(reset * 1000) : null });
+    }
+    if (res.headers.get("x-github-sso") || /SAML|SSO/i.test(message)) throw new LoadError("sso", info);
+    throw new LoadError("forbidden", info);
+  }
+  if (res.status === 404) throw new LoadError("notfound", info);
+  throw new LoadError("http", info);
+}
+
+function decodeBase64(b64) {
+  const bin = atob(b64.replace(/\s/g, ""));
+  return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+}
+
+/* Inhoud van een reeks bestanden ophalen: eerst in één GraphQL-aanvraag, anders per bestand. */
+async function fetchBatch(owner, name, batch) {
+  const texts = new Map();
+  try {
+    const fields = batch.map((f, i) => `b${i}:object(oid:"${f.sha}"){...on Blob{text isTruncated}}`).join(" ");
+    const out = await gh("/graphql", { method: "POST", body: { query: `query($o:String!,$n:String!){repository(owner:$o,name:$n){${fields}}}`, variables: { o: owner, n: name } } });
+    const repo = out.data && out.data.repository;
+    if (repo) batch.forEach((f, i) => { const b = repo["b" + i]; if (b && typeof b.text === "string" && !b.isTruncated) texts.set(f.sha, b.text); });
+  } catch (err) {
+    if (["network", "auth", "rate"].includes(err.kind)) throw err;   // per bestand proberen heeft dan geen zin
+  }
+  for (const f of batch) {
+    if (texts.has(f.sha)) continue;
+    const blob = await gh(`/repos/${owner}/${name}/git/blobs/${f.sha}`, { what: f.path });
+    texts.set(f.sha, blob.encoding === "base64" ? decodeBase64(blob.content) : blob.content);
+  }
+  return batch.map(f => ({ path: f.path, text: texts.get(f.sha) }));
+}
+
+async function loadFromGitHub(onProgress) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(cfg.repo)) throw new LoadError("badrepo");
+  const [owner, name] = cfg.repo.split("/");
+  let info, commit;
+  try {
+    info = await gh(`/repos/${owner}/${name}`);
+  } catch (err) {
+    if (err.kind === "notfound") throw new LoadError("norepo", err.info);
+    throw err;
+  }
+  const ref = cfg.ref || info.default_branch;
+  try {
+    commit = await gh(`/repos/${owner}/${name}/commits/${encodeURIComponent(ref)}`);
+  } catch (err) {
+    if (err.kind === "notfound" || err.info.status === 422) throw new LoadError("noref", { ...err.info, ref });
+    if (err.info.status === 409) throw new LoadError("nomodel", { ref });   // lege repository
+    throw err;
+  }
+  const build = `${(commit.commit.committer.date || "").slice(0, 10)} · ${commit.sha.slice(0, 7)} · ${ref}`;
+
+  const cached = await cacheGet();
+  if (cached && cached.sha === commit.sha) return { ...cached.model, build };
+
+  const tree = await gh(`/repos/${owner}/${name}/git/trees/${commit.commit.tree.sha}?recursive=1`);
+  const files = tree.tree.filter(e => e.type === "blob" && ((e.path.startsWith("model/") && e.path.endsWith(".xml")) || (!e.path.includes("/") && e.path.endsWith(".archimate"))));
+  if (!files.some(f => f.path.startsWith("model/"))) throw new LoadError("nomodel", { ref, truncated: tree.truncated });
+
+  const batches = [];
+  for (let i = 0; i < files.length; i += 80) batches.push(files.slice(i, i + 80));
+  const loaded = [];
+  let done = 0, next = 0;
+  onProgress(0, files.length);
+  await Promise.all(Array.from({ length: Math.min(4, batches.length) }, async () => {
+    while (next < batches.length) {
+      const batch = batches[next++];
+      loaded.push(...await fetchBatch(owner, name, batch));
+      done += batch.length; onProgress(done, files.length);
+    }
+  }));
+  loaded.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  const model = buildModel(loaded, name);
+  if (!Object.keys(model.views).length) throw new LoadError("noviews", { ref, skipped: model.skipped.length });
+  if (tree.truncated) model.warning = "GitHub heeft de bestandslijst afgekapt; het model is mogelijk onvolledig.";
+  await cachePut({ sha: commit.sha, build, model });
+  return { ...model, build };
+}
+
+/* ---------- Schermen: verbinden, laden, fouten ---------- */
+function describeError(err) {
+  const repo = `<b>${esc(cfg.repo)}</b>`, i = err.info || {};
+  const raw = i.message ? `<p><code>GitHub: ${esc(i.status)} ${esc(i.message)}</code></p>` : "";
+  switch (err.kind) {
+    case "network": return ["Geen verbinding met GitHub", `<p>api.github.com is niet bereikbaar. Het model kon daardoor niet worden opgehaald.</p><ul><li>Controleer je internetverbinding of VPN.</li><li>Mogelijk blokkeert het netwerk of een browserextensie de verbinding met GitHub.</li></ul><p><code>${esc(i.detail)}</code></p>`];
+    case "auth": return ["Het token is ongeldig of verlopen", `<p>GitHub accepteert het opgegeven toegangstoken niet. Maak een nieuw token aan en vul het hieronder in.</p>${raw}`];
+    case "norepo": return [`Geen toegang tot ${esc(cfg.repo)}`, `<p>GitHub meldt dat de repository ${repo} niet bestaat of dat dit token er niet bij mag. Bij privé-repository's maakt GitHub daar bewust geen onderscheid tussen.</p><ul><li>Klopt de naam van de repository (eigenaar/naam)?</li><li>Heeft je GitHub-account leesrechten op de repository? Vraag die anders aan bij de beheerder.</li><li>Is het token aangemaakt met de organisatie als <i>Resource owner</i>, met deze repository geselecteerd en met <i>Contents: Read-only</i>?</li><li>Sommige organisaties moeten een nieuw token eerst goedkeuren.</li></ul>${raw}`];
+    case "sso": return ["Het token is niet vrijgegeven voor de organisatie", `<p>De organisatie gebruikt single sign-on. Open je token op GitHub en kies bij <i>Configure SSO</i> voor <i>Authorize</i> bij de organisatie.</p>${raw}`];
+    case "rate": return ["De limiet van GitHub is bereikt", `<p>Er zijn in korte tijd te veel aanvragen gedaan met dit token.${i.reset ? ` Probeer het opnieuw na <b>${i.reset.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}</b>.` : " Probeer het later opnieuw."}</p>${raw}`];
+    case "forbidden": return ["GitHub weigert de toegang", `<p>Het token is geldig, maar mag ${i.what ? `<code>${esc(i.what)}</code>` : "deze gegevens"} niet lezen. Controleer of het token <i>Contents: Read-only</i> heeft voor ${repo}.</p>${raw}`];
+    case "noref": return [`Branch '${esc(i.ref)}' niet gevonden`, `<p>De repository ${repo} is bereikbaar, maar heeft geen branch of tag met deze naam. Laat het veld <i>Branch</i> leeg om de standaardbranch te gebruiken.</p>`];
+    case "nomodel": return ["Geen ArchiMate-model gevonden", `<p>De repository ${repo} is bereikbaar, maar bevat op branch <b>${esc(i.ref)}</b> geen map <code>model/</code> met XML-bestanden. Deze viewer verwacht een repository die met Archi (coArchi) wordt beheerd.</p>`];
+    case "noviews": return ["Het model bevat geen views", `<p>De bestanden in ${repo} zijn gelezen, maar er zijn geen ArchiMate-views in gevonden${i.skipped ? ` (${i.skipped} bestanden waren onleesbaar)` : ""}.</p>`];
+    case "badrepo": return ["Ongeldige repositorynaam", "<p>Vul de repository in als <code>eigenaar/naam</code>, bijvoorbeeld <code>Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen</code>.</p>"];
+    case "http": return ["GitHub gaf een onverwachte fout", `<p>Probeer het over enkele minuten opnieuw. Houdt het aan, kijk dan op <a href="https://www.githubstatus.com" target="_blank" rel="noopener noreferrer">githubstatus.com</a>.</p>${raw}`];
+    default: return ["Het model kon niet worden geladen", `<p>Er ging iets mis bij het verwerken van het model.</p><p><code>${esc(err.stack || err.message || err)}</code></p>`];
+  }
+}
+
+function showConnect(err) {
+  const hasToken = !!(cfg.token || memoryToken);
+  let html = "<h1>ArchiMate-viewer</h1>";
+  if (err) { const [title, body] = describeError(err); html += `<div class="error" role="alert"><h2>${title}</h2>${body}</div>`; }
+  else html += `<p>Deze viewer haalt het ArchiMate-model rechtstreeks uit een GitHub-repository. Daarvoor is een persoonlijk toegangstoken nodig van een account dat de repository mag lezen.</p>`;
+  html += `
+    <label class="f" for="fRepo">Repository</label>
+    <input type="text" id="fRepo" value="${esc(cfg.repo)}" placeholder="eigenaar/naam" spellcheck="false" autocomplete="off">
+    <label class="f" for="fRef">Branch <span class="muted">(leeg = standaardbranch)</span></label>
+    <input type="text" id="fRef" value="${esc(cfg.ref)}" spellcheck="false" autocomplete="off">
+    <label class="f" for="fToken">Toegangstoken</label>
+    <input type="password" id="fToken" placeholder="${hasToken ? "bewaard token blijft in gebruik – vul alleen in om te vervangen" : "github_pat_…"}" autocomplete="off">
+    <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="fKeep" checked> Token in deze browser onthouden</label>
+    <div class="row"><button class="primary" id="fGo">Verbinden</button>${hasToken ? '<button id="fForget">Token wissen</button>' : ""}${M ? '<button id="fCancel">Annuleren</button>' : ""}</div>
+    <h3 class="muted" style="margin:22px 0 4px">Zo maak je een token</h3>
+    <ol class="muted">
+      <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com → Settings → Developer settings → Fine-grained tokens</a>.</li>
+      <li>Kies bij <i>Resource owner</i> de eigenaar van de repository (de organisatie).</li>
+      <li>Kies <i>Only select repositories</i> en selecteer de repository met het model.</li>
+      <li>Geef bij <i>Repository permissions</i> alleen <i>Contents: Read-only</i>.</li>
+      <li>Kopieer het token en plak het hierboven.</li>
+    </ol>
+    <p class="muted">Het token wordt alleen in deze browser bewaard en uitsluitend naar api.github.com gestuurd. De viewer kan er alleen mee lezen.</p>`;
+  $("card").innerHTML = html;
+  $("screen").classList.add("show");
+  const go = () => {
+    cfg.repo = $("fRepo").value.trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$|\/$/g, "");
+    cfg.ref = $("fRef").value.trim();
+    const token = $("fToken").value.trim();
+    if (token) { cfg.token = memoryToken = token; store.set("amv.token", token, $("fKeep").checked); }
+    store.set("amv.repo", cfg.repo); store.set("amv.ref", cfg.ref);
+    if (!(cfg.token || memoryToken)) { $("fToken").focus(); $("fToken").placeholder = "Vul eerst een token in"; return; }
+    boot();
+  };
+  $("fGo").onclick = go;
+  for (const id of ["fRepo", "fRef", "fToken"]) $(id).onkeydown = e => { if (e.key === "Enter") go(); };
+  if ($("fForget")) $("fForget").onclick = () => { cfg.token = memoryToken = ""; store.del("amv.token"); showConnect(null); };
+  if ($("fCancel")) $("fCancel").onclick = () => $("screen").classList.remove("show");
+  (hasToken ? $("fGo") : $("fToken")).focus();
+}
+
+function showProgress(done, total) {
+  $("card").innerHTML = `<h1>Model laden…</h1><p class="muted">${esc(cfg.repo)}${total ? ` · ${done} van ${total} bestanden` : ""}</p><progress ${total ? `value="${done}" max="${total}"` : ""}></progress>`;
+  $("screen").classList.add("show");
+}
+
+/* ---------- Start ---------- */
+function startViewer(model, offlineNote) {
+  M = model;
+  indexModel();
+  $("modelName").textContent = M.name;
+  $("build").textContent = offlineNote || "Bijgewerkt: " + M.build;
+  $("build").classList.toggle("offline", !!offlineNote);
+  $("build").title = M.warning || cfg.repo;
+  $("screen").classList.remove("show");
+  readHash();
+  $("search").value = "";
+  renderNav("");
+  renderView();
+}
+
+async function boot() {
+  if (!(cfg.token || memoryToken)) return showConnect(null);
+  showProgress(0, 0);
+  try {
+    startViewer(await loadFromGitHub(showProgress));
+  } catch (err) {
+    const error = err instanceof LoadError ? err : new LoadError("other", { message: String(err && err.stack || err) });
+    if (!(err instanceof LoadError)) error.stack = String(err && err.stack || err);
+    if (error.kind === "network") {
+      const cached = await cacheGet();
+      if (cached) return startViewer({ ...cached.model, build: cached.build }, `Geen verbinding met GitHub – bewaarde versie van ${cached.build}`);
+    }
+    showConnect(error);
+  }
+}
+
+$("reload").onclick = () => boot();
+$("settings").onclick = () => showConnect(null);
+boot();
+</script>
+</body>
+</html>
