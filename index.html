@@ -115,6 +115,39 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
 #left .tools a { color: var(--accent); text-decoration: none; cursor: pointer; }
 #left .tools a:hover { text-decoration: underline; }
 
+/* Tabbladen in het menu */
+#left .tabs { display: flex; gap: 6px; margin-top: 10px; }
+#left .tabs button { flex: 1; padding: 4px 8px; }
+#nav a.app { padding-left: 8px; }
+
+/* Applicatiepagina: overzicht van één element, los van een view */
+#page { position: absolute; inset: 0; z-index: 6; overflow: auto; background: var(--panel); color: var(--text); padding: 22px 28px 60px; }
+#page[hidden] { display: none; }
+#page .inner { max-width: 980px; margin: 0 auto; }
+#page .back { display: inline-block; margin-bottom: 14px; color: var(--accent); text-decoration: none; cursor: pointer; font-size: 13px; }
+#page h1 { font-size: 24px; margin: 0 0 2px; overflow-wrap: anywhere; }
+#page .type { color: var(--muted); }
+#page h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 26px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+#page p.doc { white-space: pre-wrap; margin: 14px 0 0; max-width: 760px; overflow-wrap: anywhere; }
+#page table { border-collapse: collapse; width: 100%; }
+#page th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#page td { padding: 5px 10px 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+#page table.props td:first-child { color: var(--muted); width: 240px; }
+#page a { color: var(--accent); text-decoration: none; cursor: pointer; }
+#page a:hover { text-decoration: underline; }
+#page .sub, #page .none { color: var(--muted); font-size: 12.5px; }
+#page .dir { white-space: nowrap; color: var(--muted); }
+#page .facts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+#page .fact { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 2px 11px; font-size: 12.5px; }
+#page .vgroup { margin: 0 0 12px; }
+#page .vgroup .path { font-weight: 600; margin-bottom: 2px; }
+#page .vgroup a { display: block; padding: 2px 0 2px 14px; }
+#page .chips a { display: inline-block; background: var(--accent-soft); border-radius: 12px; padding: 1px 10px; margin: 0 6px 6px 0; }
+body.pagemode { grid-template-columns: 290px 1fr; }
+body.pagemode #right { display: none; }
+.pagelink { display: inline-block; margin-top: 8px; color: var(--accent); text-decoration: none; font-size: 13px; }
+.pagelink:hover { text-decoration: underline; }
+
 /* Pop-over met gekoppelde elementen */
 #pop {
   position: absolute; z-index: 5; width: max-content; max-width: 360px; pointer-events: none; background: var(--panel);
@@ -165,6 +198,7 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
     <div class="build" id="build"></div>
     <div class="tools"><a id="reload">Vernieuwen</a><a id="lock">Vergrendelen</a></div>
     <input id="search" type="search" placeholder="Zoek view of element…" autocomplete="off">
+    <div class="tabs"><button id="tabViews" class="on">Views</button><button id="tabApps">Applicaties</button></div>
   </header>
   <nav id="nav"></nav>
 </aside>
@@ -192,6 +226,7 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
     </div>
   </div>
   <div id="pop" hidden></div>
+  <div id="page" hidden></div>
   <div id="hint"></div>
 </main>
 
@@ -209,8 +244,18 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 /* ---------- Modelindexen ---------- */
 let relsByElement = new Map();            // element-id -> [relatie-id]
 let viewsByElement = new Map();           // element-id -> Set(view-id)
+let viewsByRelation = new Map();          // relatie-id -> Set(view-id) waarin de relatie is getekend
+let viewPath = new Map();                 // view-id -> mappenpad, bijvoorbeeld "03. Lopende projecten / 2025 - Signicat"
 function indexModel() {
-  relsByElement = new Map(); viewsByElement = new Map();
+  relsByElement = new Map(); viewsByElement = new Map(); viewsByRelation = new Map(); viewPath = new Map();
+  for (const [vid, v] of Object.entries(M.views)) for (const c of v.conns) if (c.r) {
+    if (!viewsByRelation.has(c.r)) viewsByRelation.set(c.r, new Set());
+    viewsByRelation.get(c.r).add(vid);
+  }
+  (function walk(node, path) {
+    for (const vid of node.v) viewPath.set(vid, path.join(" / "));
+    for (const f of node.f) walk(f, [...path, f.n]);
+  })(M.tree, []);
   for (const [rid, r] of Object.entries(M.relations)) {
     for (const end of [r.s, r.g]) {
       if (!relsByElement.has(end)) relsByElement.set(end, []);
@@ -301,7 +346,8 @@ function relStyle(rel) {
 }
 
 /* ---------- Toestand ---------- */
-const state = { view: null, sel: new Set(), depth: 1, hide: false, typesOff: new Set() };
+const state = { view: null, sel: new Set(), depth: 1, hide: false, typesOff: new Set(), page: null };
+let navTab = "views";         // tabblad in het menu: views of applicaties
 let L = null;                 // lay-out van de huidige view
 let tf = { x: 0, y: 0, k: 1 };
 
@@ -514,6 +560,9 @@ function select(elementId, additive) {
 
 function openView(viewId, elementId) {
   if (!M.views[viewId]) return;
+  const wasPage = !!state.page;
+  state.page = null; syncPage();
+  if (wasPage) pushNext = true;
   state.view = viewId;
   state.sel = new Set(elementId ? [elementId] : []);
   state.typesOff.clear();
@@ -544,7 +593,8 @@ function renderPanel(f) {
   let html = "";
   if (state.sel.size === 1) {
     const id = [...state.sel][0], el = M.elements[id];
-    html += `<h2>${esc(el.n || "(naamloos)")}</h2><div class="type">${esc(typeName(el.t))}</div>`;
+    html += `<h2>${esc(el.n || "(naamloos)")}</h2><div class="type">${esc(typeName(el.t))}</div>`
+      + `<a href="#" class="pagelink" data-page="${esc(id)}">${el.t === "ApplicationComponent" ? "Applicatiepagina" : "Overzichtspagina"} openen →</a>`;
     if (el.d) html += `<p class="doc">${esc(el.d)}</p>`;
     html += propsTable(el.p);
 
@@ -585,6 +635,8 @@ function renderPanel(f) {
 }
 
 $("right").addEventListener("click", e => {
+  const pageLink = e.target.closest("a[data-page]");
+  if (pageLink) { e.preventDefault(); openPage(pageLink.dataset.page); return; }
   const link = e.target.closest("a[data-view]");
   if (link) { e.preventDefault(); openView(link.dataset.view, link.dataset.el); return; }
   const chip = e.target.closest("[data-toggle]");
@@ -605,6 +657,82 @@ $("right").addEventListener("change", e => {
   applyFocus();
 });
 
+/* ---------- Applicatiepagina ---------- */
+function openPage(id) {
+  if (!M.elements[id]) return;
+  hidePop();
+  state.page = id; pushNext = true;
+  syncPage(); writeHash();
+  $("page").scrollTop = 0;
+}
+function closePage() { state.page = null; pushNext = true; syncPage(); writeHash(); }
+
+/* Toont of verbergt de pagina op basis van state.page. */
+function syncPage() {
+  const page = $("page"), wasMode = document.body.classList.contains("pagemode");
+  page.hidden = !state.page;
+  document.body.classList.toggle("pagemode", !!state.page);
+  if (state.page) page.innerHTML = pageHtml(state.page);
+  else if (wasMode) fit();          // de tekenruimte is weer smaller geworden
+  for (const a of document.querySelectorAll("#nav a[data-page]")) a.classList.toggle("current", a.dataset.page === state.page);
+}
+
+function pageHtml(id) {
+  const el = M.elements[id], name = e => esc(e.n || "(naamloos)");
+  const rels = (relsByElement.get(id) || []).map(rid => ({ rid, r: M.relations[rid] }))
+    .filter(x => M.elements[x.r.s] && M.elements[x.r.g])
+    .map(x => ({ ...x, out: x.r.s === id, otherId: x.r.s === id ? x.r.g : x.r.s, kind: relKind(x.r) }))
+    .sort((a, b) => (M.elements[a.otherId].n || "").localeCompare(M.elements[b.otherId].n || "", "nl") || (a.r.n || "").localeCompare(b.r.n || "", "nl", { numeric: true }));
+  const structural = x => x.kind === "Composition" || x.kind === "Aggregation";
+  const partOf = rels.filter(x => structural(x) && !x.out), parts = rels.filter(x => structural(x) && x.out), links = rels.filter(x => !structural(x));
+  const views = [...(viewsByElement.get(id) || [])];
+  const others = new Set(links.map(x => x.otherId));
+  const link = oid => `<a data-page="${esc(oid)}">${name(M.elements[oid])}</a>`;
+
+  let html = `<div class="inner"><a class="back" data-close="1">← Terug naar de view</a>`
+    + `<h1>${name(el)}</h1><div class="type">${esc(typeName(el.t))}</div>`
+    + `<div class="facts"><span class="fact">${links.length} koppeling${links.length === 1 ? "" : "en"} met ${others.size} element${others.size === 1 ? "" : "en"}</span><span class="fact">${views.length} view${views.length === 1 ? "" : "s"}</span>`
+    + (el.p || []).filter(([, v]) => v && v.length <= 40).slice(0, 4).map(([k, v]) => `<span class="fact">${esc(k)}: ${esc(v)}</span>`).join("") + "</div>";
+  if (el.d) html += `<p class="doc">${esc(el.d)}</p>`;
+
+  if (el.p && el.p.length) html += "<h2>Eigenschappen</h2><table class=\"props\">" + el.p.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${linkify(v)}</td></tr>`).join("") + "</table>";
+
+  if (partOf.length || parts.length) {
+    html += "<h2>Indeling</h2>";
+    if (partOf.length) html += `<div class="chips"><span class="sub">Onderdeel van: </span>${[...new Set(partOf.map(x => x.otherId))].map(link).join("")}</div>`;
+    if (parts.length) html += `<div class="chips"><span class="sub">Bestaat uit: </span>${[...new Set(parts.map(x => x.otherId))].map(link).join("")}</div>`;
+  }
+
+  html += `<h2>Koppelingen (${links.length})</h2>`;
+  if (!links.length) html += '<div class="none">Dit element heeft geen koppelingen in het model.</div>';
+  else html += "<table><tr><th>Richting</th><th>Gekoppeld element</th><th>Code</th><th>Soort</th><th>Getekend in</th></tr>" + links.map(x => {
+    const o = M.elements[x.otherId], drawn = [...(viewsByRelation.get(x.rid) || [])].sort((a, b) => M.views[a].n.localeCompare(M.views[b].n, "nl", { numeric: true }));
+    return `<tr><td class="dir">${x.out ? "→ naar" : "← van"}</td><td>${link(x.otherId)}<div class="sub">${esc(typeName(o.t))}</div></td>`
+      + `<td>${esc(x.r.n || "")}${x.r.d ? `<div class="sub">${esc(x.r.d)}</div>` : ""}</td><td>${esc(REL_NL[x.kind] || x.kind)}</td>`
+      + `<td>${drawn.length ? `<a data-view="${esc(drawn[0])}" data-el="${esc(id)}" title="${esc(drawn.map(v => M.views[v].n).join("\n"))}">${drawn.length} view${drawn.length === 1 ? "" : "s"}</a>` : '<span class="none">niet getekend</span>'}</td></tr>`;
+  }).join("") + "</table>";
+
+  html += `<h2>Komt voor in views (${views.length})</h2>`;
+  if (!views.length) html += '<div class="none">Dit element staat in geen enkele view.</div>';
+  else {
+    const groups = new Map();
+    for (const vid of views) { const path = viewPath.get(vid) || "Overig"; if (!groups.has(path)) groups.set(path, []); groups.get(path).push(vid); }
+    for (const [path, list] of [...groups].sort((a, b) => a[0].localeCompare(b[0], "nl", { numeric: true })))
+      html += `<div class="vgroup"><div class="path">${esc(path)}</div>` + list.sort((a, b) => M.views[a].n.localeCompare(M.views[b].n, "nl", { numeric: true }))
+        .map(vid => `<a data-view="${esc(vid)}" data-el="${esc(id)}">${esc(M.views[vid].n)}</a>`).join("") + "</div>";
+  }
+  return html + "</div>";
+}
+
+$("page").addEventListener("click", e => {
+  const a = e.target.closest("a");
+  if (!a || a.target === "_blank") return;
+  e.preventDefault();
+  if (a.dataset.close) closePage();
+  else if (a.dataset.page) openPage(a.dataset.page);
+  else if (a.dataset.view) openView(a.dataset.view, a.dataset.el);
+});
+
 /* ---------- Navigatie en zoeken ---------- */
 const openFolders = new Set();           // mappen die de gebruiker heeft opengeklapt
 function treeHtml(node, top, path = "") {
@@ -614,6 +742,19 @@ function treeHtml(node, top, path = "") {
 }
 function renderNav(query) {
   const q = query.trim().toLowerCase();
+  $("tabViews").classList.toggle("on", navTab === "views");
+  $("tabApps").classList.toggle("on", navTab === "apps");
+  $("search").placeholder = navTab === "apps" ? "Zoek applicatie…" : "Zoek view of element…";
+  if (navTab === "apps") {
+    const apps = Object.entries(M.elements).filter(([, e]) => e.t === "ApplicationComponent" && (!q
+      || (e.n || "").toLowerCase().includes(q) || (e.p || []).some(pr => pr[1].toLowerCase().includes(q))))
+      .sort((a, b) => (a[1].n || "").localeCompare(b[1].n || "", "nl"));
+    $("nav").innerHTML = `<div class="group-title">Applicaties (${apps.length})</div>` + apps.map(([id, e]) => {
+      const nRel = (relsByElement.get(id) || []).length, nViews = (viewsByElement.get(id) || new Set()).size;
+      return `<a href="#" class="app${id === state.page ? " current" : ""}" data-page="${esc(id)}">${esc(e.n || "(naamloos)")}<div class="sub">${nRel} relatie${nRel === 1 ? "" : "s"} · ${nViews} view${nViews === 1 ? "" : "s"}</div></a>`;
+    }).join("");
+    return;
+  }
   if (!q) { $("nav").innerHTML = treeHtml(M.tree, true); }
   else {
     const views = Object.entries(M.views).filter(([, v]) => v.n.toLowerCase().includes(q)).sort((a, b) => a[1].n.localeCompare(b[1].n, "nl"));
@@ -628,6 +769,8 @@ function renderNav(query) {
   for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("current", a.dataset.view === state.view);
 }
 $("search").addEventListener("input", e => renderNav(e.target.value));
+$("tabViews").onclick = () => { navTab = "views"; renderNav($("search").value); };
+$("tabApps").onclick = () => { navTab = "apps"; renderNav($("search").value); };
 $("nav").addEventListener("toggle", e => {
   const key = e.target.dataset && e.target.dataset.key;
   if (key) e.target.open ? openFolders.add(key) : openFolders.delete(key);
@@ -636,7 +779,8 @@ $("nav").addEventListener("click", e => {
   const a = e.target.closest("a");
   if (!a) return;
   e.preventDefault();
-  if (a.dataset.view) openView(a.dataset.view);
+  if (a.dataset.page) openPage(a.dataset.page);
+  else if (a.dataset.view) openView(a.dataset.view);
   else if (a.dataset.find) {
     const id = a.dataset.find, views = viewsByElement.get(id);
     if (views.has(state.view)) select(id, false); else openView([...views][0], id);
@@ -776,31 +920,36 @@ $("modeHide").onclick = () => { state.hide = true; applyFocus(); };
 $("depth").onchange = e => { state.depth = +e.target.value; applyFocus(); };
 document.addEventListener("keydown", e => {
   if (!M || $("screen").classList.contains("show")) return;
+  if (e.key === "Escape" && state.page) return closePage();
   if (e.key === "Escape" && document.activeElement !== $("search")) select(null);
   if (e.key === "/" && document.activeElement !== $("search")) { e.preventDefault(); $("search").focus(); }
 });
 
 /* ---------- Deelbare link ---------- */
 let lastHash = "";
+let pushNext = false;         // de volgende adreswijziging als nieuwe stap in de browsergeschiedenis zetten
 function writeHash() {
   if (!M) return;
-  const p = new URLSearchParams({ v: state.view });
+  const p = new URLSearchParams(state.page ? { a: state.page, v: state.view } : { v: state.view });
   if (state.sel.size) p.set("s", [...state.sel].join(","));
   if (state.depth > 1) p.set("d", state.depth);
   if (state.hide) p.set("h", 1);
   lastHash = "#" + p.toString();
-  if (location.hash !== lastHash) history.replaceState(null, "", lastHash);
+  if (location.hash !== lastHash) history[pushNext ? "pushState" : "replaceState"](null, "", lastHash);
+  pushNext = false;
 }
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
-  const first = (function firstView(n) { return n.v[0] || n.f.map(firstView).find(Boolean); })(M.tree) || Object.keys(M.views)[0];
+  // Startview: de eerste view in het menu die niet leeg is (mappen eerst, daarna losse views).
+  const first = (function firstView(n) { return n.f.map(firstView).find(Boolean) || n.v.find(v => M.views[v].nodes.length); })(M.tree) || Object.keys(M.views)[0];
   state.view = M.views[p.get("v")] ? p.get("v") : first;
   state.sel = new Set((p.get("s") || "").split(",").filter(id => M.elements[id]));
   state.depth = Math.min(3, Math.max(1, +p.get("d") || 1));
   state.hide = p.get("h") === "1";
+  state.page = M.elements[p.get("a")] ? p.get("a") : null;
   $("depth").value = state.depth;
 }
-window.addEventListener("hashchange", () => { if (M && location.hash !== lastHash) { readHash(); renderView(); } });
+window.addEventListener("hashchange", () => { if (M && location.hash !== lastHash) { readHash(); renderView(); syncPage(); } });
 window.addEventListener("resize", () => { if (L) applyTf(); });
 
 /* ---------- coArchi-bestanden omzetten naar het model ---------- */
@@ -1038,6 +1187,7 @@ function startViewer(model) {
   $("search").value = "";
   renderNav("");
   renderView();
+  syncPage();
 }
 
 async function boot() {
@@ -1056,7 +1206,7 @@ async function boot() {
 }
 
 $("reload").onclick = () => boot();
-$("lock").onclick = async () => { await forgetKey(); M = null; $("nodes").innerHTML = ""; $("conns").innerHTML = ""; $("nav").innerHTML = ""; $("right").innerHTML = ""; boot(); };
+$("lock").onclick = async () => { await forgetKey(); M = null; state.page = null; $("page").hidden = true; document.body.classList.remove("pagemode"); $("nodes").innerHTML = ""; $("conns").innerHTML = ""; $("nav").innerHTML = ""; $("right").innerHTML = ""; boot(); };
 boot();
 </script>
 </body>
