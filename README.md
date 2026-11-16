@@ -1,23 +1,13 @@
 # ArchiMate-viewer
 
 Een interactieve viewer voor ArchiMate-modellen die met Archi (coArchi) in een GitHub-repository
-worden beheerd. De viewer is één los bestand, `index.html`. Het bevat zelf geen modelgegevens:
-bij het openen haalt het het actuele model rechtstreeks uit de GitHub-repository.
+worden beheerd. De viewer wordt gepubliceerd op GitHub Pages; het model staat er versleuteld naast
+en is alleen met een wachtwoord te openen.
 
 ## Gebruiken
 
-1. Download `index.html` (open het bestand op GitHub en kies *Download raw file*).
-2. Open het bestand in een browser (Chrome, Edge, Firefox of Safari).
-3. Vul bij de eerste keer een persoonlijk toegangstoken in. Het scherm legt uit hoe je dat maakt:
-   een *fine-grained token* met alleen **Contents: Read-only** op de repository met het model.
-
-Daarna opent de viewer direct. Het token blijft in de browser staan en wordt alleen naar
-`api.github.com` gestuurd; de pagina kan technisch met geen enkele andere server verbinden.
-
-Wie geen leesrechten op de modelrepository heeft, krijgt het model niet te zien. De toegang wordt
-dus volledig door GitHub geregeld.
-
-## Wat kun je ermee
+Open de website van de viewer en vul het wachtwoord in. De browser kan het onthouden; met
+*Vergrendelen* (linksboven) wis je dat weer.
 
 - **Klik op een element**: alleen de relaties van dat element en de elementen aan de andere kant
   blijven zichtbaar. De rest wordt vervaagd of verborgen (knoppen *Vervagen* / *Verbergen*).
@@ -28,31 +18,53 @@ dus volledig door GitHub geregeld.
   view zijn getekend) en de andere views waarin het voorkomt.
 - Relatietypen per view aan- en uitvinken, zoeken op naam of eigenschap (toets `/`), slepen om te
   verschuiven, scrollen om te zoomen.
-- De adresbalk bevat de view en de selectie.
+- De adresbalk bevat de view en de selectie, dus een link is deelbaar (de ontvanger heeft het
+  wachtwoord nodig).
 
-## Als het niet lukt
+## Hoe de beveiliging werkt
 
-De viewer meldt wat er mis is en wat je kunt doen:
+Deze repository en de website zijn openbaar, maar bevatten geen leesbare modelgegevens. De
+workflow *Viewer publiceren* haalt het model uit de besloten modelrepository, comprimeert het en
+versleutelt het met AES-256-GCM. De sleutel wordt met PBKDF2 (600.000 rondes) uit het wachtwoord
+afgeleid. De browser ontsleutelt het model lokaal; het wachtwoord wordt nergens naartoe gestuurd.
 
-| Melding | Betekenis |
-|---|---|
-| Geen verbinding met GitHub | `api.github.com` is niet bereikbaar. Is het model eerder geladen, dan toont de viewer de laatst bewaarde versie. |
-| Het token is ongeldig of verlopen | Maak een nieuw token aan. |
-| Geen toegang tot *repository* | De repository bestaat niet of het token mag er niet bij. |
-| Het token is niet vrijgegeven voor de organisatie | De organisatie gebruikt single sign-on; autoriseer het token. |
-| De limiet van GitHub is bereikt | Te veel aanvragen; de melding noemt het tijdstip waarna het weer kan. |
-| Branch niet gevonden / Geen ArchiMate-model gevonden | De repository is bereikbaar, maar bevat niet wat de viewer verwacht. |
+Houd rekening met het volgende:
 
-## Andere repository of branch
+- Het is één gedeeld wachtwoord. Wie het kent, kan het model openen; iemand de toegang ontnemen
+  kan alleen door het wachtwoord te wijzigen.
+- Het versleutelde bestand is voor iedereen te downloaden, dus een aanvaller kan ongestoord
+  wachtwoorden proberen. Kies daarom een lang wachtwoord, bijvoorbeeld een zin van vijf
+  willekeurige woorden. De bouwstap weigert wachtwoorden korter dan 12 tekens.
 
-Standaard opent de viewer `Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen`. Een andere repository
-of branch kies je via *Instellingen* in de viewer, of in de adresbalk:
-`index.html?repo=eigenaar/naam&ref=branch`. De standaard staat in `index.html` in de constante
-`DEFAULT_REPO`.
+## Inrichten (eenmalig)
+
+1. **Deploy key**: maak een SSH-sleutelpaar (`ssh-keygen -t ed25519 -N "" -f modelkey`). Voeg de
+   publieke sleutel toe aan de modelrepository onder *Settings > Deploy keys* (zonder schrijfrechten).
+2. **Secrets** in deze repository onder *Settings > Secrets and variables > Actions*:
+   - `MODEL_DEPLOY_KEY`: de inhoud van de privésleutel;
+   - `VIEWER_PASSWORD`: het wachtwoord voor gebruikers.
+3. **Pages**: zet onder *Settings > Pages* de bron op *GitHub Actions*.
+4. Start de workflow *Viewer publiceren* onder *Actions* met *Run workflow*.
+
+De modelrepository staat in `.github/workflows/publiceren.yml` bij `MODEL_REPO`.
+
+## Bijwerken
+
+- De workflow kijkt op werkdagen elk half uur of het model is gewijzigd en publiceert alleen dan.
+- Direct bijwerken of **het wachtwoord wijzigen**: pas zo nodig het secret aan en kies
+  *Actions > Viewer publiceren > Run workflow*.
+- GitHub schakelt geplande workflows uit als een repository 60 dagen geen commits heeft gehad.
+  GitHub stuurt daarover vooraf een e-mail; de planning is onder *Actions* weer aan te zetten.
+
+## Lokaal bouwen
+
+```
+VIEWER_PASSWORD='een lang wachtwoord' node build.mjs --model <pad naar modelrepository> --out _site
+python3 -m http.server --directory _site 8000     # open daarna http://localhost:8000
+```
 
 ## Beperkingen
 
 - Ondersteunt ArchiMate-views in het coArchi-formaat (map `model/`); sketch- en canvasviews niet.
 - De weergave benadert Archi, maar is niet pixelgelijk (lettertype, pictogrammen, lijnaanhechting).
 - Afbeeldingen in views en verbindingen naar andere verbindingen worden niet getekend.
-- De eerste keer laden duurt enkele seconden; daarna wordt het model per versie in de browser bewaard.

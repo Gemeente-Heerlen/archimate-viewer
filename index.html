@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src data:; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; form-action 'none'; base-uri 'none'">
 <title>ArchiMate-viewer</title>
 <style>
 :root {
@@ -114,7 +114,6 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
 #left .tools { margin-top: 6px; display: flex; gap: 12px; font-size: 12px; }
 #left .tools a { color: var(--accent); text-decoration: none; cursor: pointer; }
 #left .tools a:hover { text-decoration: underline; }
-#left .build.offline { color: var(--sel); }
 
 /* Diagram */
 .node rect.shape, .node path.shape { stroke: #5a5a5a; stroke-width: 1; }
@@ -149,7 +148,7 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
   <header>
     <h1 id="modelName"></h1>
     <div class="build" id="build"></div>
-    <div class="tools"><a id="reload">Vernieuwen</a><a id="settings">Instellingen</a></div>
+    <div class="tools"><a id="reload">Vernieuwen</a><a id="lock">Vergrendelen</a></div>
     <input id="search" type="search" placeholder="Zoek view of element…" autocomplete="off">
   </header>
   <nav id="nav"></nav>
@@ -825,241 +824,172 @@ function buildModel(files, fallbackName) {
   return model;
 }
 
-/* ---------- Instellingen en opslag ---------- */
-const API = "https://api.github.com";
-const DEFAULT_REPO = "Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen";
-const store = {
-  get(k) { try { return localStorage.getItem(k) ?? sessionStorage.getItem(k); } catch { return null; } },
-  set(k, v, persist = true) { try { (persist ? localStorage : sessionStorage).setItem(k, v); (persist ? sessionStorage : localStorage).removeItem(k); } catch { /* opslag geblokkeerd */ } },
-  del(k) { try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch { /* opslag geblokkeerd */ } },
-};
-const query = new URLSearchParams(location.search);
-const cfg = {
-  repo: (query.get("repo") || store.get("amv.repo") || DEFAULT_REPO).trim(),
-  ref: (query.get("ref") ?? store.get("amv.ref") ?? "").trim(),
-  token: store.get("amv.token") || "",
-};
-let memoryToken = "";   // als opslag in de browser niet werkt
+/* ---------- Versleuteld model ophalen en openen ----------
+   Naast deze pagina staat model.enc: de modelbestanden, gecomprimeerd en versleuteld met
+   AES-256-GCM. De sleutel wordt met PBKDF2 uit het wachtwoord afgeleid. Zonder het juiste
+   wachtwoord is de inhoud niet leesbaar. Indeling van het bestand:
+   "AMV1" | iteraties (4 bytes) | salt (16) | iv (12) | versleutelde gegevens + controlecode. */
+const MODEL_URL = "model.enc";
 
-/* Laatst geladen model per repo bewaren, zodat openen snel gaat en offline nog werkt. */
-function idb(mode, fn) {
-  return new Promise((resolve, reject) => {
-    const open = indexedDB.open("archimate-viewer", 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("models");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction("models", mode), req = fn(tx.objectStore("models"));
-      tx.oncomplete = () => resolve(req.result); tx.onerror = () => reject(tx.error);
-    };
-  });
-}
-const cacheKey = () => `${cfg.repo.toLowerCase()}@${cfg.ref}`;
-const cacheGet = () => idb("readonly", s => s.get(cacheKey())).catch(() => null);
-const cachePut = value => idb("readwrite", s => s.put(value, cacheKey())).catch(() => null);
-
-/* ---------- GitHub ---------- */
 class LoadError extends Error {
   constructor(kind, info = {}) { super(kind); this.kind = kind; this.info = info; }
 }
 
-async function gh(path, { method = "GET", body, what = "" } = {}) {
+/* De afgeleide sleutel (niet het wachtwoord) kan in de browser worden bewaard. */
+function keyStore(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("archimate-viewer-sleutel", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("keys");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("keys", mode), req = fn(tx.objectStore("keys"));
+      tx.oncomplete = () => resolve(req.result); tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+const savedKey = () => keyStore("readonly", s => s.get("key")).catch(() => null);
+const saveKey = value => keyStore("readwrite", s => s.put(value, "key")).catch(() => null);
+const forgetKey = () => keyStore("readwrite", s => s.delete("key")).catch(() => null);
+
+const hex = bytes => [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+
+async function fetchPackage() {
+  if (!globalThis.crypto || !crypto.subtle || typeof DecompressionStream === "undefined") throw new LoadError("browser");
   let res;
   try {
-    res = await fetch(API + path, {
-      method, body: body ? JSON.stringify(body) : undefined, cache: "no-store",
-      headers: { Authorization: "Bearer " + (cfg.token || memoryToken), Accept: "application/vnd.github+json", ...(body ? { "Content-Type": "application/json" } : {}) },
-    });
+    res = await fetch(MODEL_URL, { cache: "no-store" });
   } catch (err) {
     throw new LoadError("network", { detail: String(err.message || err) });
   }
-  if (res.ok) return res.json();
-  let message = "";
-  try { message = (await res.json()).message || ""; } catch { /* geen JSON */ }
-  const info = { status: res.status, message, what };
-  if (res.status === 401) throw new LoadError("auth", info);
-  if (res.status === 403 || res.status === 429) {
-    if (res.headers.get("x-ratelimit-remaining") === "0" || /rate limit/i.test(message)) {
-      const reset = +res.headers.get("x-ratelimit-reset");
-      throw new LoadError("rate", { ...info, reset: reset ? new Date(reset * 1000) : null });
-    }
-    if (res.headers.get("x-github-sso") || /SAML|SSO/i.test(message)) throw new LoadError("sso", info);
-    throw new LoadError("forbidden", info);
-  }
-  if (res.status === 404) throw new LoadError("notfound", info);
-  throw new LoadError("http", info);
+  if (res.status === 404) throw new LoadError("nodata");
+  if (!res.ok) throw new LoadError("http", { status: res.status });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.length < 52 || new TextDecoder().decode(buf.subarray(0, 4)) !== "AMV1") throw new LoadError("format");
+  return {
+    iterations: new DataView(buf.buffer, buf.byteOffset + 4, 4).getUint32(0),
+    salt: buf.subarray(8, 24), iv: buf.subarray(24, 36), data: buf.subarray(36),
+  };
 }
 
-function decodeBase64(b64) {
-  const bin = atob(b64.replace(/\s/g, ""));
-  return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+async function deriveKey(password, pkg) {
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password.normalize("NFC").trim()), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: pkg.salt, iterations: pkg.iterations, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
 }
 
-/* Inhoud van een reeks bestanden ophalen: eerst in één GraphQL-aanvraag, anders per bestand. */
-async function fetchBatch(owner, name, batch) {
-  const texts = new Map();
+async function openPackage(key, pkg) {
+  let plain;
   try {
-    const fields = batch.map((f, i) => `b${i}:object(oid:"${f.sha}"){...on Blob{text isTruncated}}`).join(" ");
-    const out = await gh("/graphql", { method: "POST", body: { query: `query($o:String!,$n:String!){repository(owner:$o,name:$n){${fields}}}`, variables: { o: owner, n: name } } });
-    const repo = out.data && out.data.repository;
-    if (repo) batch.forEach((f, i) => { const b = repo["b" + i]; if (b && typeof b.text === "string" && !b.isTruncated) texts.set(f.sha, b.text); });
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: pkg.iv }, key, pkg.data);
+  } catch {
+    throw new LoadError("password");   // AES-GCM merkt een verkeerde sleutel op aan de controlecode
+  }
+  let payload;
+  try {
+    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    payload = JSON.parse(text);
   } catch (err) {
-    if (["network", "auth", "rate"].includes(err.kind)) throw err;   // per bestand proberen heeft dan geen zin
+    throw new LoadError("format", { detail: String(err.message || err) });
   }
-  for (const f of batch) {
-    if (texts.has(f.sha)) continue;
-    const blob = await gh(`/repos/${owner}/${name}/git/blobs/${f.sha}`, { what: f.path });
-    texts.set(f.sha, blob.encoding === "base64" ? decodeBase64(blob.content) : blob.content);
-  }
-  return batch.map(f => ({ path: f.path, text: texts.get(f.sha) }));
+  const model = buildModel(payload.files || [], payload.name || "ArchiMate-model");
+  if (!Object.keys(model.views).length) throw new LoadError("noviews", { skipped: model.skipped.length });
+  model.build = [payload.date, payload.commit].filter(Boolean).join(" · ");
+  return model;
 }
 
-async function loadFromGitHub(onProgress) {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(cfg.repo)) throw new LoadError("badrepo");
-  const [owner, name] = cfg.repo.split("/");
-  let info, commit;
-  try {
-    info = await gh(`/repos/${owner}/${name}`);
-  } catch (err) {
-    if (err.kind === "notfound") throw new LoadError("norepo", err.info);
-    throw err;
-  }
-  const ref = cfg.ref || info.default_branch;
-  try {
-    commit = await gh(`/repos/${owner}/${name}/commits/${encodeURIComponent(ref)}`);
-  } catch (err) {
-    if (err.kind === "notfound" || err.info.status === 422) throw new LoadError("noref", { ...err.info, ref });
-    if (err.info.status === 409) throw new LoadError("nomodel", { ref });   // lege repository
-    throw err;
-  }
-  const build = `${(commit.commit.committer.date || "").slice(0, 10)} · ${commit.sha.slice(0, 7)} · ${ref}`;
-
-  const cached = await cacheGet();
-  if (cached && cached.sha === commit.sha) return { ...cached.model, build };
-
-  const tree = await gh(`/repos/${owner}/${name}/git/trees/${commit.commit.tree.sha}?recursive=1`);
-  const files = tree.tree.filter(e => e.type === "blob" && ((e.path.startsWith("model/") && e.path.endsWith(".xml")) || (!e.path.includes("/") && e.path.endsWith(".archimate"))));
-  if (!files.some(f => f.path.startsWith("model/"))) throw new LoadError("nomodel", { ref, truncated: tree.truncated });
-
-  const batches = [];
-  for (let i = 0; i < files.length; i += 80) batches.push(files.slice(i, i + 80));
-  const loaded = [];
-  let done = 0, next = 0;
-  onProgress(0, files.length);
-  await Promise.all(Array.from({ length: Math.min(4, batches.length) }, async () => {
-    while (next < batches.length) {
-      const batch = batches[next++];
-      loaded.push(...await fetchBatch(owner, name, batch));
-      done += batch.length; onProgress(done, files.length);
-    }
-  }));
-  loaded.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-
-  const model = buildModel(loaded, name);
-  if (!Object.keys(model.views).length) throw new LoadError("noviews", { ref, skipped: model.skipped.length });
-  if (tree.truncated) model.warning = "GitHub heeft de bestandslijst afgekapt; het model is mogelijk onvolledig.";
-  await cachePut({ sha: commit.sha, build, model });
-  return { ...model, build };
-}
-
-/* ---------- Schermen: verbinden, laden, fouten ---------- */
+/* ---------- Schermen: wachtwoord, laden, fouten ---------- */
 function describeError(err) {
-  const repo = `<b>${esc(cfg.repo)}</b>`, i = err.info || {};
-  const raw = i.message ? `<p><code>GitHub: ${esc(i.status)} ${esc(i.message)}</code></p>` : "";
+  const i = err.info || {};
   switch (err.kind) {
-    case "network": return ["Geen verbinding met GitHub", `<p>api.github.com is niet bereikbaar. Het model kon daardoor niet worden opgehaald.</p><ul><li>Controleer je internetverbinding of VPN.</li><li>Mogelijk blokkeert het netwerk of een browserextensie de verbinding met GitHub.</li></ul><p><code>${esc(i.detail)}</code></p>`];
-    case "auth": return ["Het token is ongeldig of verlopen", `<p>GitHub accepteert het opgegeven toegangstoken niet. Maak een nieuw token aan en vul het hieronder in.</p>${raw}`];
-    case "norepo": return [`Geen toegang tot ${esc(cfg.repo)}`, `<p>GitHub meldt dat de repository ${repo} niet bestaat of dat dit token er niet bij mag. Bij privé-repository's maakt GitHub daar bewust geen onderscheid tussen.</p><ul><li>Klopt de naam van de repository (eigenaar/naam)?</li><li>Heeft je GitHub-account leesrechten op de repository? Vraag die anders aan bij de beheerder.</li><li>Is het token aangemaakt met de organisatie als <i>Resource owner</i>, met deze repository geselecteerd en met <i>Contents: Read-only</i>?</li><li>Sommige organisaties moeten een nieuw token eerst goedkeuren.</li></ul>${raw}`];
-    case "sso": return ["Het token is niet vrijgegeven voor de organisatie", `<p>De organisatie gebruikt single sign-on. Open je token op GitHub en kies bij <i>Configure SSO</i> voor <i>Authorize</i> bij de organisatie.</p>${raw}`];
-    case "rate": return ["De limiet van GitHub is bereikt", `<p>Er zijn in korte tijd te veel aanvragen gedaan met dit token.${i.reset ? ` Probeer het opnieuw na <b>${i.reset.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}</b>.` : " Probeer het later opnieuw."}</p>${raw}`];
-    case "forbidden": return ["GitHub weigert de toegang", `<p>Het token is geldig, maar mag ${i.what ? `<code>${esc(i.what)}</code>` : "deze gegevens"} niet lezen. Controleer of het token <i>Contents: Read-only</i> heeft voor ${repo}.</p>${raw}`];
-    case "noref": return [`Branch '${esc(i.ref)}' niet gevonden`, `<p>De repository ${repo} is bereikbaar, maar heeft geen branch of tag met deze naam. Laat het veld <i>Branch</i> leeg om de standaardbranch te gebruiken.</p>`];
-    case "nomodel": return ["Geen ArchiMate-model gevonden", `<p>De repository ${repo} is bereikbaar, maar bevat op branch <b>${esc(i.ref)}</b> geen map <code>model/</code> met XML-bestanden. Deze viewer verwacht een repository die met Archi (coArchi) wordt beheerd.</p>`];
-    case "noviews": return ["Het model bevat geen views", `<p>De bestanden in ${repo} zijn gelezen, maar er zijn geen ArchiMate-views in gevonden${i.skipped ? ` (${i.skipped} bestanden waren onleesbaar)` : ""}.</p>`];
-    case "badrepo": return ["Ongeldige repositorynaam", "<p>Vul de repository in als <code>eigenaar/naam</code>, bijvoorbeeld <code>Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen</code>.</p>"];
-    case "http": return ["GitHub gaf een onverwachte fout", `<p>Probeer het over enkele minuten opnieuw. Houdt het aan, kijk dan op <a href="https://www.githubstatus.com" target="_blank" rel="noopener noreferrer">githubstatus.com</a>.</p>${raw}`];
+    case "password": return ["Onjuist wachtwoord", "<p>Met dit wachtwoord kan het model niet worden geopend. Let op hoofdletters en spaties. Is het wachtwoord onlangs gewijzigd, vraag dan het nieuwe op bij de beheerder van het model.</p>"];
+    case "network": return ["Het model kon niet worden opgehaald", location.protocol === "file:"
+      ? "<p>Deze pagina is als los bestand geopend. De viewer werkt alleen via de website, omdat het versleutelde model daar naast de pagina staat.</p>"
+      : `<p>De verbinding met de website is mislukt. Controleer je internetverbinding en probeer het opnieuw.</p><p><code>${esc(i.detail)}</code></p>`];
+    case "nodata": return ["Er is nog geen model gepubliceerd", "<p>De viewer staat klaar, maar het versleutelde model (<code>model.enc</code>) ontbreekt op de website. Dat wijst erop dat de publicatie nog niet heeft gedraaid of is mislukt. Neem contact op met de beheerder.</p>"];
+    case "format": return ["Het model is onleesbaar", `<p>Het bestand <code>model.enc</code> is beschadigd of hoort bij een andere versie van de viewer. Ververs de pagina; blijft de melding terugkomen, neem dan contact op met de beheerder.</p>${i.detail ? `<p><code>${esc(i.detail)}</code></p>` : ""}`];
+    case "noviews": return ["Het model bevat geen views", `<p>Het model is geopend, maar er zijn geen ArchiMate-views in gevonden${i.skipped ? ` (${i.skipped} bestanden waren onleesbaar)` : ""}.</p>`];
+    case "browser": return ["Deze browser wordt niet ondersteund", "<p>De viewer heeft een actuele versie van Chrome, Edge, Firefox of Safari nodig en moet via https worden geopend.</p>"];
+    case "http": return ["De website gaf een onverwachte fout", `<p>Het model kon niet worden opgehaald (foutcode ${esc(i.status)}). Probeer het over enkele minuten opnieuw.</p>`];
     default: return ["Het model kon niet worden geladen", `<p>Er ging iets mis bij het verwerken van het model.</p><p><code>${esc(err.stack || err.message || err)}</code></p>`];
   }
 }
 
-function showConnect(err) {
-  const hasToken = !!(cfg.token || memoryToken);
-  let html = "<h1>ArchiMate-viewer</h1>";
-  if (err) { const [title, body] = describeError(err); html += `<div class="error" role="alert"><h2>${title}</h2>${body}</div>`; }
-  else html += `<p>Deze viewer haalt het ArchiMate-model rechtstreeks uit een GitHub-repository. Daarvoor is een persoonlijk toegangstoken nodig van een account dat de repository mag lezen.</p>`;
-  html += `
-    <label class="f" for="fRepo">Repository</label>
-    <input type="text" id="fRepo" value="${esc(cfg.repo)}" placeholder="eigenaar/naam" spellcheck="false" autocomplete="off">
-    <label class="f" for="fRef">Branch <span class="muted">(leeg = standaardbranch)</span></label>
-    <input type="text" id="fRef" value="${esc(cfg.ref)}" spellcheck="false" autocomplete="off">
-    <label class="f" for="fToken">Toegangstoken</label>
-    <input type="password" id="fToken" placeholder="${hasToken ? "bewaard token blijft in gebruik – vul alleen in om te vervangen" : "github_pat_…"}" autocomplete="off">
-    <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="fKeep" checked> Token in deze browser onthouden</label>
-    <div class="row"><button class="primary" id="fGo">Verbinden</button>${hasToken ? '<button id="fForget">Token wissen</button>' : ""}${M ? '<button id="fCancel">Annuleren</button>' : ""}</div>
-    <h3 class="muted" style="margin:22px 0 4px">Zo maak je een token</h3>
-    <ol class="muted">
-      <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com → Settings → Developer settings → Fine-grained tokens</a>.</li>
-      <li>Kies bij <i>Resource owner</i> de eigenaar van de repository (de organisatie).</li>
-      <li>Kies <i>Only select repositories</i> en selecteer de repository met het model.</li>
-      <li>Geef bij <i>Repository permissions</i> alleen <i>Contents: Read-only</i>.</li>
-      <li>Kopieer het token en plak het hierboven.</li>
-    </ol>
-    <p class="muted">Het token wordt alleen in deze browser bewaard en uitsluitend naar api.github.com gestuurd. De viewer kan er alleen mee lezen.</p>`;
-  $("card").innerHTML = html;
+function showError(err) {
+  const [title, body] = describeError(err);
+  $("card").innerHTML = `<h1>ArchiMate-viewer</h1><div class="error" role="alert"><h2>${title}</h2>${body}</div><div class="row"><button class="primary" id="fRetry">Opnieuw proberen</button></div>`;
   $("screen").classList.add("show");
-  const go = () => {
-    cfg.repo = $("fRepo").value.trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$|\/$/g, "");
-    cfg.ref = $("fRef").value.trim();
-    const token = $("fToken").value.trim();
-    if (token) { cfg.token = memoryToken = token; store.set("amv.token", token, $("fKeep").checked); }
-    store.set("amv.repo", cfg.repo); store.set("amv.ref", cfg.ref);
-    if (!(cfg.token || memoryToken)) { $("fToken").focus(); $("fToken").placeholder = "Vul eerst een token in"; return; }
-    boot();
-  };
-  $("fGo").onclick = go;
-  for (const id of ["fRepo", "fRef", "fToken"]) $(id).onkeydown = e => { if (e.key === "Enter") go(); };
-  if ($("fForget")) $("fForget").onclick = () => { cfg.token = memoryToken = ""; store.del("amv.token"); showConnect(null); };
-  if ($("fCancel")) $("fCancel").onclick = () => $("screen").classList.remove("show");
-  (hasToken ? $("fGo") : $("fToken")).focus();
+  $("fRetry").onclick = () => boot();
 }
 
-function showProgress(done, total) {
-  $("card").innerHTML = `<h1>Model laden…</h1><p class="muted">${esc(cfg.repo)}${total ? ` · ${done} van ${total} bestanden` : ""}</p><progress ${total ? `value="${done}" max="${total}"` : ""}></progress>`;
+function showPassword(pkg, err) {
+  let html = "<h1>ArchiMate-viewer</h1>";
+  if (err) { const [title, body] = describeError(err); html += `<div class="error" role="alert"><h2>${title}</h2>${body}</div>`; }
+  else html += "<p>Dit model is beveiligd. Vul het wachtwoord in om het te openen.</p>";
+  html += `
+    <label class="f" for="fPass">Wachtwoord</label>
+    <input type="password" id="fPass" autocomplete="current-password">
+    <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="fKeep" checked> Op dit apparaat onthouden</label>
+    <div class="row"><button class="primary" id="fGo">Openen</button><span class="muted" id="fBusy"></span></div>
+    <p class="muted" style="margin-top:18px">Het wachtwoord wordt nergens naartoe gestuurd: het model wordt in je eigen browser ontsleuteld.</p>`;
+  $("card").innerHTML = html;
+  $("screen").classList.add("show");
+  const go = async () => {
+    const password = $("fPass").value;
+    if (!password.trim()) { $("fPass").focus(); return; }
+    const keep = $("fKeep").checked;
+    $("fGo").disabled = true; $("fBusy").textContent = "Bezig met openen…";
+    try {
+      const key = await deriveKey(password, pkg);
+      const model = await openPackage(key, pkg);
+      if (keep) await saveKey({ salt: hex(pkg.salt), iterations: pkg.iterations, key }); else await forgetKey();
+      startViewer(model);
+    } catch (e) {
+      const error = e instanceof LoadError ? e : Object.assign(new LoadError("other"), { stack: String(e && e.stack || e) });
+      if (error.kind === "password") showPassword(pkg, error); else showError(error);
+    }
+  };
+  $("fGo").onclick = go;
+  $("fPass").onkeydown = e => { if (e.key === "Enter") go(); };
+  $("fPass").focus();
+}
+
+function showProgress() {
+  $("card").innerHTML = '<h1>Model laden…</h1><progress></progress>';
   $("screen").classList.add("show");
 }
 
 /* ---------- Start ---------- */
-function startViewer(model, offlineNote) {
+function startViewer(model) {
+  const keepState = M && M.name === model.name;
   M = model;
   indexModel();
   $("modelName").textContent = M.name;
-  $("build").textContent = offlineNote || "Bijgewerkt: " + M.build;
-  $("build").classList.toggle("offline", !!offlineNote);
-  $("build").title = M.warning || cfg.repo;
+  $("build").textContent = "Bijgewerkt: " + M.build;
   $("screen").classList.remove("show");
-  readHash();
+  $("card").innerHTML = "";   // het wachtwoordveld niet in de pagina laten staan
+  if (!keepState || !M.views[state.view]) readHash();
+  else state.sel = new Set([...state.sel].filter(id => M.elements[id]));
   $("search").value = "";
   renderNav("");
   renderView();
 }
 
 async function boot() {
-  if (!(cfg.token || memoryToken)) return showConnect(null);
-  showProgress(0, 0);
+  showProgress();
   try {
-    startViewer(await loadFromGitHub(showProgress));
-  } catch (err) {
-    const error = err instanceof LoadError ? err : new LoadError("other", { message: String(err && err.stack || err) });
-    if (!(err instanceof LoadError)) error.stack = String(err && err.stack || err);
-    if (error.kind === "network") {
-      const cached = await cacheGet();
-      if (cached) return startViewer({ ...cached.model, build: cached.build }, `Geen verbinding met GitHub – bewaarde versie van ${cached.build}`);
+    const pkg = await fetchPackage();
+    const saved = await savedKey();
+    if (saved && saved.salt === hex(pkg.salt) && saved.iterations === pkg.iterations) {
+      try { return startViewer(await openPackage(saved.key, pkg)); }
+      catch (e) { if (!(e instanceof LoadError) || e.kind !== "password") throw e; await forgetKey(); }   // wachtwoord is gewijzigd
     }
-    showConnect(error);
+    showPassword(pkg, null);
+  } catch (e) {
+    showError(e instanceof LoadError ? e : Object.assign(new LoadError("other"), { stack: String(e && e.stack || e) }));
   }
 }
 
 $("reload").onclick = () => boot();
-$("settings").onclick = () => showConnect(null);
+$("lock").onclick = async () => { await forgetKey(); M = null; $("nodes").innerHTML = ""; $("conns").innerHTML = ""; $("nav").innerHTML = ""; $("right").innerHTML = ""; boot(); };
 boot();
 </script>
 </body>

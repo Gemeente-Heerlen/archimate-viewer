@@ -1,0 +1,92 @@
+name: Viewer publiceren
+
+# Haalt het model uit de (besloten) modelrepository, versleutelt het met het wachtwoord en
+# publiceert de viewer op GitHub Pages. Vereist in deze repository (Settings > Secrets and
+# variables > Actions):
+#   VIEWER_PASSWORD   het wachtwoord waarmee gebruikers het model openen (minimaal 12 tekens)
+#   MODEL_DEPLOY_KEY  privésleutel van een alleen-lezen deploy key op de modelrepository
+# en onder Settings > Pages: Source = GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "7,37 5-18 * * 1-5"   # op werkdagen elk half uur kijken of het model is gewijzigd (UTC)
+  workflow_dispatch:
+
+env:
+  MODEL_REPO: Gemeente-Heerlen/Heerlen-Architectuur-Next-Gen
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - name: Instellingen controleren
+        env:
+          HAS_PASSWORD: ${{ secrets.VIEWER_PASSWORD != '' }}
+          HAS_KEY: ${{ secrets.MODEL_DEPLOY_KEY != '' }}
+        run: |
+          ok=true
+          if [ "$HAS_PASSWORD" != "true" ]; then echo "::error::Het secret VIEWER_PASSWORD ontbreekt (Settings > Secrets and variables > Actions)."; ok=false; fi
+          if [ "$HAS_KEY" != "true" ]; then echo "::error::Het secret MODEL_DEPLOY_KEY ontbreekt (Settings > Secrets and variables > Actions)."; ok=false; fi
+          $ok
+
+      - uses: actions/checkout@v4
+
+      - name: Model ophalen
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MODEL_REPO }}
+          ssh-key: ${{ secrets.MODEL_DEPLOY_KEY }}
+          path: _model
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Nagaan of er iets is gewijzigd
+        id: check
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          stamp=$(node build.mjs --model _model --stamp)
+          live=$(curl -fsS "$BASE_URL/version.json" 2>/dev/null || true)
+          if [ "${{ github.event_name }}" = "schedule" ] && echo "$live" | grep -q "$stamp"; then
+            echo "Model en viewer zijn ongewijzigd; er wordt niets gepubliceerd."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Website bouwen
+        if: steps.check.outputs.publish == 'true'
+        env:
+          VIEWER_PASSWORD: ${{ secrets.VIEWER_PASSWORD }}
+        run: node build.mjs --model _model --out _site
+
+      - name: Website klaarzetten
+        if: steps.check.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
