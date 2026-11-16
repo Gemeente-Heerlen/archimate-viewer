@@ -115,6 +115,21 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
 #left .tools a { color: var(--accent); text-decoration: none; cursor: pointer; }
 #left .tools a:hover { text-decoration: underline; }
 
+/* Pop-over met gekoppelde elementen */
+#pop {
+  position: absolute; z-index: 5; width: max-content; max-width: 360px; pointer-events: none; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+#pop[hidden] { display: none; }
+#pop .ttl { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+#pop .sub { color: var(--muted); }
+#pop h4 { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 9px 0 3px; }
+#pop .pl { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+#pop .pl .arrow { color: var(--muted); flex: none; width: 13px; text-align: center; }
+#pop .pl .nm { flex: 1; overflow-wrap: anywhere; }
+#pop .pl .rt, #pop .more { color: var(--muted); font-size: 11.5px; }
+#pop .pl.off { opacity: .65; }
+
 /* Diagram */
 .node rect.shape, .node path.shape { stroke: #5a5a5a; stroke-width: 1; }
 .node { cursor: pointer; }
@@ -176,6 +191,7 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
       <button id="clear" title="Selectie wissen (Esc)">Wis selectie</button>
     </div>
   </div>
+  <div id="pop" hidden></div>
   <div id="hint"></div>
 </main>
 
@@ -513,6 +529,16 @@ function linkify(v) {
   return /^https?:\/\/\S+$/.test(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>` : esc(v);
 }
 
+/* Alle relaties van een element, gesplitst in wel en niet getekend in de huidige view. */
+function relationsOf(id) {
+  const inView = new Set(L.conns.filter(c => c.raw.r).map(c => c.raw.r));
+  const other = x => M.elements[x.r.s === id ? x.r.g : x.r.s];
+  const rels = (relsByElement.get(id) || []).map(rid => ({ rid, r: M.relations[rid] }))
+    .filter(x => M.elements[x.r.s] && M.elements[x.r.g])
+    .sort((a, b) => (other(a).n || "").localeCompare(other(b).n || "", "nl"));
+  return { here: rels.filter(x => inView.has(x.rid)), elsewhere: rels.filter(x => !inView.has(x.rid)) };
+}
+
 function renderPanel(f) {
   const v = M.views[state.view];
   let html = "";
@@ -522,17 +548,13 @@ function renderPanel(f) {
     if (el.d) html += `<p class="doc">${esc(el.d)}</p>`;
     html += propsTable(el.p);
 
-    const inView = new Set(L.conns.filter(c => c.raw.r).map(c => c.raw.r));
-    const rels = (relsByElement.get(id) || []).map(rid => ({ rid, r: M.relations[rid] }))
-      .filter(x => M.elements[x.r.s] && M.elements[x.r.g]);
     const row = ({ rid, r }, off) => {
       const out = r.s === id, other = out ? r.g : r.s, o = M.elements[other];
       return `<div class="rel${off ? " off" : ""}" data-el="${esc(other)}" data-off="${off ? 1 : ""}" title="${esc(REL_NL[relKind(r)] || relKind(r))}${r.d ? " – " + esc(r.d) : ""}">`
         + `<span class="arrow">${out ? "→" : "←"}</span><span class="nm">${esc(o.n || "(naamloos)")}${r.n ? ` <span class="rt">· ${esc(r.n)}</span>` : ""}</span>`
         + `<span class="rt">${esc(REL_NL[relKind(r)] || relKind(r))}</span></div>`;
     };
-    const byName = (a, b) => (M.elements[a.r.s === id ? a.r.g : a.r.s].n || "").localeCompare(M.elements[b.r.s === id ? b.r.g : b.r.s].n || "", "nl");
-    const here = rels.filter(x => inView.has(x.rid)).sort(byName), elsewhere = rels.filter(x => !inView.has(x.rid)).sort(byName);
+    const { here, elsewhere } = relationsOf(id);
     html += `<h3>Relaties in deze view (${here.length})</h3>` + (here.length ? here.map(x => row(x, false)).join("") : '<div class="empty">Geen relaties in deze view.</div>');
     if (elsewhere.length) html += `<h3>Overige relaties in het model (${elsewhere.length})</h3>` + elsewhere.map(x => row(x, true)).join("");
 
@@ -705,6 +727,45 @@ svg.addEventListener("pointerout", e => {
   if (!e.target.closest?.(".node")) return;
   for (const g of svg.querySelectorAll(".hover")) g.classList.remove("hover");
 });
+
+/* Pop-over: bij stilhangen boven een element tonen waarmee het gekoppeld is */
+let popTimer = null, popNode = null, mouse = { x: 0, y: 0 };
+function hidePop() { clearTimeout(popTimer); popTimer = null; popNode = null; $("pop").hidden = true; }
+function showPop(id) {
+  const el = M.elements[id], { here, elsewhere } = relationsOf(id);
+  if (!here.length && el.t === "Grouping") return;   // geen pop-over op de grote achtergrondvlakken
+  const others = new Set([...here, ...elsewhere].map(x => (x.r.s === id ? x.r.g : x.r.s)));
+  const line = (x, off) => {
+    const out = x.r.s === id, o = M.elements[out ? x.r.g : x.r.s];
+    return `<div class="pl${off ? " off" : ""}"><span class="arrow">${out ? "→" : "←"}</span><span class="nm">${esc(o.n || "(naamloos)")}${x.r.n ? ` <span class="rt">· ${esc(x.r.n)}</span>` : ""}</span><span class="rt">${esc(REL_NL[relKind(x.r)] || relKind(x.r))}</span></div>`;
+  };
+  const block = (title, list, max, off) => !list.length ? "" : `<h4>${title} (${list.length})</h4>` + list.slice(0, max).map(x => line(x, off)).join("")
+    + (list.length > max ? `<div class="more">… en nog ${list.length - max}</div>` : "");
+  const pop = $("pop");
+  pop.innerHTML = `<div class="ttl">${esc(el.n || "(naamloos)")}</div><div class="sub">${esc(typeName(el.t))} · ${others.size ? `gekoppeld aan ${others.size} element${others.size === 1 ? "" : "en"}` : "geen gekoppelde elementen"}</div>`
+    + block("In deze view", here, 12, false) + block("Niet in deze view getekend", elsewhere, 5, true);
+  pop.hidden = false;
+  const r = svg.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  let x = mouse.x - r.left + 14, y = mouse.y - r.top + 16;
+  if (x + w > r.width - 8) x = Math.max(8, mouse.x - r.left - w - 14);
+  if (y + h > r.height - 8) y = mouse.y - r.top - h - 12;                 // past niet eronder: erboven
+  if (y < 8) y = Math.max(8, Math.min(r.height - h - 8, y + h / 2));     // past ook niet erboven: zo goed mogelijk
+  pop.style.left = x + "px"; pop.style.top = y + "px";
+}
+svg.addEventListener("pointermove", e => { mouse = { x: e.clientX, y: e.clientY }; if (drag && drag.moved) hidePop(); });
+svg.addEventListener("pointerover", e => {
+  const g = e.target.closest?.(".node");
+  if (drag || e.pointerType === "touch" || (g && g === popNode)) return;
+  hidePop();
+  const o = g && L.nodes.get(g.dataset.id);
+  if (!o || !o.raw.e) return;
+  popNode = g;
+  popTimer = setTimeout(() => showPop(o.raw.e), 400);
+});
+svg.addEventListener("pointerout", e => { if ((e.relatedTarget?.closest?.(".node") || null) !== popNode) hidePop(); });
+svg.addEventListener("pointerdown", hidePop);
+svg.addEventListener("wheel", hidePop, { passive: true });
+svg.addEventListener("pointerleave", hidePop);
 
 $("zoomIn").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.3); };
 $("zoomOut").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.3); };
