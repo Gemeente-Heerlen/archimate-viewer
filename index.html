@@ -128,7 +128,12 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
 .conn.hover path.line, .conn.hover .head { stroke: var(--accent); stroke-width: 2; }
 .node.hover .shape { stroke: var(--accent); stroke-width: 2; }
 .node.sel .shape { stroke: var(--sel) !important; stroke-width: 3 !important; }
-.conn.typeoff { display: none; }
+.conn.typeoff, .goff { display: none; }
+#groupButtons { display: flex; gap: 6px; flex-wrap: wrap; }
+#groupButtons button { opacity: .55; }
+#groupButtons button.on { opacity: 1; }
+#groupButtons .sw { display: inline-block; width: 10px; height: 10px; border: 1px solid #777; border-radius: 2px; margin-right: 6px; }
+.bar[hidden] { display: none; }
 
 #svg.focus .node:not(.on):not(.ctx) { opacity: .09; }
 #svg.focus .conn:not(.on) { opacity: .05; }
@@ -168,6 +173,10 @@ button.on { background: var(--accent-soft); border-color: var(--accent); color: 
       <select id="depth" title="Hoeveel relaties ver vanaf het gekozen element">
         <option value="1">1</option><option value="2">2</option><option value="3">3</option>
       </select>
+    </div>
+    <div class="bar" id="groupBar" hidden>
+      <label>Groeperingen</label>
+      <span id="groupButtons"></span>
     </div>
     <div class="bar">
       <button id="zoomOut" title="Uitzoomen">−</button>
@@ -285,7 +294,7 @@ function relStyle(rel) {
 }
 
 /* ---------- Toestand ---------- */
-const state = { view: null, sel: new Set(), depth: 1, hide: false, typesOff: new Set() };
+const state = { view: null, sel: new Set(), depth: 1, hide: false, typesOff: new Set(), groupsOff: new Set() };
 let L = null;                 // lay-out van de huidige view
 let tf = { x: 0, y: 0, k: 1 };
 
@@ -427,14 +436,54 @@ function renderView() {
   $("viewTitle").title = v.n;
   document.title = v.n + " – " + M.name;
   for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("current", a.dataset.view === state.view);
+  renderGroupBar();
+  updateHidden();
   fit();
   applyFocus();
 }
 
+/* Groeperingen op het hoogste niveau van de view (zoals Cloud of On-premise) zijn per stuk uit te zetten.
+   De keuze geldt op naam, zodat ze bij het wisselen van view blijft staan. */
+function groupName(o) {
+  if (o.parent) return null;
+  const el = o.raw.e ? M.elements[o.raw.e] : null;
+  if (el && el.t === "Grouping") return el.n || "(naamloos)";
+  if (o.raw.k === "group") return o.raw.txt || "(naamloos)";
+  return null;
+}
+function renderGroupBar() {
+  const groups = new Map();
+  for (const o of [...L.order].filter(o => groupName(o)).sort((a, b) => a.y - b.y || a.x - b.x))
+    if (!groups.has(groupName(o))) groups.set(groupName(o), o.raw.fc || "#d2d7d7");
+  $("groupBar").hidden = !groups.size;
+  $("groupButtons").innerHTML = [...groups].map(([name, color]) =>
+    `<button data-group="${esc(name)}" class="${state.groupsOff.has(name) ? "" : "on"}" title="Groepering tonen of verbergen"><span class="sw" style="background:${esc(color)}"></span>${esc(name)}</button>`).join("");
+}
+function updateHidden() {
+  L.hidden = new Set();
+  for (const o of L.order)                      // ouders staan voor hun kinderen in de lijst
+    if (o.parent ? L.hidden.has(o.parent) : state.groupsOff.has(groupName(o))) L.hidden.add(o);
+  // Elementen die los op een uitgezette groepering zijn getekend (zonder erin genest te zijn) gaan mee.
+  const off = [...L.hidden].filter(o => !o.parent);
+  if (off.length) for (const o of L.order) {
+    if (L.hidden.has(o) || (o.parent ? !L.hidden.has(o.parent) : groupName(o))) continue;
+    const cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+    if (o.parent || off.some(g => cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h)) L.hidden.add(o);
+  }
+}
+$("groupButtons").addEventListener("click", e => {
+  const b = e.target.closest("button[data-group]");
+  if (!b) return;
+  const name = b.dataset.group;
+  state.groupsOff.has(name) ? state.groupsOff.delete(name) : state.groupsOff.add(name);
+  b.classList.toggle("on", !state.groupsOff.has(name));
+  applyFocus();
+});
+
 /* ---------- Focus: alleen de relaties van het gekozen element ---------- */
 function computeFocus() {
   const selNodes = new Set();
-  for (const o of L.order) if (o.raw.e && state.sel.has(o.raw.e)) selNodes.add(o);
+  for (const o of L.order) if (o.raw.e && state.sel.has(o.raw.e) && !L.hidden.has(o)) selNodes.add(o);
   if (!selNodes.size) return null;
 
   // Een gekozen vak telt mee met alles wat erin genest is.
@@ -446,7 +495,7 @@ function computeFocus() {
   for (let step = 0; step < state.depth && frontier.size; step++) {
     const next = new Set();
     for (const c of L.conns) {
-      if (state.typesOff.has(relKind(c.rel))) continue;
+      if (state.typesOff.has(relKind(c.rel)) || L.hidden.has(c.S) || L.hidden.has(c.T)) continue;
       const a = frontier.has(c.S), b = frontier.has(c.T);
       if (!a && !b) continue;
       conns.add(c);
@@ -460,6 +509,7 @@ function computeFocus() {
 }
 
 function applyFocus() {
+  updateHidden();
   const f = computeFocus();
   const svg = $("svg");
   svg.classList.toggle("focus", !!f);
@@ -469,11 +519,13 @@ function applyFocus() {
     g.classList.toggle("on", !!f && f.reached.has(o));
     g.classList.toggle("ctx", !!f && f.ctx.has(o));
     g.classList.toggle("sel", !!f && f.selNodes.has(o));
+    g.classList.toggle("goff", L.hidden.has(o));
   }
   for (const c of L.conns) {
     const g = L.connEl.get(c.id);
     g.classList.toggle("on", !!f && f.conns.has(c));
     g.classList.toggle("typeoff", state.typesOff.has(relKind(c.rel)));
+    g.classList.toggle("goff", L.hidden.has(c.S) || L.hidden.has(c.T));
   }
   $("modeDim").classList.toggle("on", !state.hide);
   $("modeHide").classList.toggle("on", state.hide);
@@ -584,9 +636,11 @@ $("right").addEventListener("change", e => {
 });
 
 /* ---------- Navigatie en zoeken ---------- */
-function treeHtml(node, top) {
-  const inner = node.f.map(f => treeHtml(f, false)).join("") + node.v.map(vid => `<a href="#" data-view="${esc(vid)}">${esc(M.views[vid].n)}</a>`).join("");
-  return top ? inner : `<details open><summary>${esc(node.n)}</summary>${inner}</details>`;
+const openFolders = new Set();           // mappen die de gebruiker heeft opengeklapt
+function treeHtml(node, top, path = "") {
+  const key = path + "/" + node.n;
+  const inner = node.f.map(f => treeHtml(f, false, key)).join("") + node.v.map(vid => `<a href="#" data-view="${esc(vid)}">${esc(M.views[vid].n)}</a>`).join("");
+  return top ? inner : `<details data-key="${esc(key)}"${openFolders.has(key) ? " open" : ""}><summary>${esc(node.n)}</summary>${inner}</details>`;
 }
 function renderNav(query) {
   const q = query.trim().toLowerCase();
@@ -604,6 +658,10 @@ function renderNav(query) {
   for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("current", a.dataset.view === state.view);
 }
 $("search").addEventListener("input", e => renderNav(e.target.value));
+$("nav").addEventListener("toggle", e => {
+  const key = e.target.dataset && e.target.dataset.key;
+  if (key) e.target.open ? openFolders.add(key) : openFolders.delete(key);
+}, true);
 $("nav").addEventListener("click", e => {
   const a = e.target.closest("a");
   if (!a) return;
@@ -621,8 +679,8 @@ function applyTf() { $("vp").setAttribute("transform", `translate(${tf.x},${tf.y
 function bbox() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
-  for (const o of L.order) { add(o.x, o.y); add(o.x + o.w, o.y + o.h); }
-  for (const c of L.conns) for (const p of c.pts) add(p.x, p.y);
+  for (const o of L.order) if (!L.hidden.has(o)) { add(o.x, o.y); add(o.x + o.w, o.y + o.h); }
+  for (const c of L.conns) if (!L.hidden.has(c.S) && !L.hidden.has(c.T)) for (const p of c.pts) add(p.x, p.y);
   return isFinite(x0) ? { x0, y0, x1, y1 } : { x0: 0, y0: 0, x1: 100, y1: 100 };
 }
 function fit() {
@@ -721,6 +779,7 @@ function writeHash() {
   if (state.sel.size) p.set("s", [...state.sel].join(","));
   if (state.depth > 1) p.set("d", state.depth);
   if (state.hide) p.set("h", 1);
+  if (state.groupsOff.size) p.set("g", [...state.groupsOff].join("|"));
   lastHash = "#" + p.toString();
   if (location.hash !== lastHash) history.replaceState(null, "", lastHash);
 }
@@ -731,6 +790,7 @@ function readHash() {
   state.sel = new Set((p.get("s") || "").split(",").filter(id => M.elements[id]));
   state.depth = Math.min(3, Math.max(1, +p.get("d") || 1));
   state.hide = p.get("h") === "1";
+  state.groupsOff = new Set((p.get("g") || "").split("|").filter(Boolean));
   $("depth").value = state.depth;
 }
 window.addEventListener("hashchange", () => { if (M && location.hash !== lastHash) { readHash(); renderView(); } });
