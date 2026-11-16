@@ -42,17 +42,17 @@ jobs:
           if [ "$HAS_KEY" != "true" ]; then echo "::error::Het secret MODEL_DEPLOY_KEY ontbreekt (Settings > Secrets and variables > Actions)."; ok=false; fi
           $ok
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Model ophalen
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.MODEL_REPO }}
           ssh-key: ${{ secrets.MODEL_DEPLOY_KEY }}
           path: _model
 
       - id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Nagaan of er iets is gewijzigd
         id: check
@@ -76,7 +76,7 @@ jobs:
 
       - name: Website klaarzetten
         if: steps.check.outputs.publish == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
@@ -89,4 +89,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
